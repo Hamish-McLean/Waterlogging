@@ -12,6 +12,8 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```{r load_packages}
 
 library(data.table)
+library(dplyr)
+library(ggpubr)
 library(here)
 library(readxl)
 
@@ -19,8 +21,8 @@ library(readxl)
 
 ```{r constants}
 
-here <- here::here()
-data_dir <- file.path(here, "..", "Data")
+here        <- here::here()
+data_dir    <- file.path(here, "..", "Data")
 figures_dir <- file.path(here, "figures")
 
 ```
@@ -28,9 +30,18 @@ figures_dir <- file.path(here, "figures")
 ```{r load_data}
 
 #' Load data from excel file
+#'
+#' @description
+#' This function loads data from an Excel file, processes it,
+#' and combines it into a single data.table.
+#'
 #' @param filename The name of the excel file to load.
 #' @param sheets A vector of sheet names to load.
 #' @return A single data.table containing the data from all sheets.
+#'
+#' @import data.table
+#' @importFrom readxl read_excel
+#' @import dplyr
 load_data <- function(filename, sheets) {
 
   # Check if the file exists
@@ -40,26 +51,88 @@ load_data <- function(filename, sheets) {
   }
 
   # Read the sheets into a list of data.tables
-  data_list <- lapply(sheets, function(sheet) {
-    sheet_data <- read_excel(file_path, sheet = sheet)
-    setDT(sheet_data)
-    return(sheet_data)
-  })
+  data_list <- setNames(lapply(sheets, function(sheet) {
+    setDT(read_excel(file_path, sheet = sheet,
+      na = c("", "na", "NA", "N/A", "<NA>", "NaN", "NULL")
+    ))
+  }), sheets)
 
   # Convert tables to long format
-  data_list <- lapply(data_list, function(dt) {
-    dt_long <- melt(dt, id.vars = c("ID", "Date"), variable.name = "Variable", value.name = "Value")
-    return(dt_long)
+  data_list <- lapply(names(data_list), function(name) {
+    dt <- data_list[[name]]
+    id_cols <- setdiff(colnames(dt), c("A", "B", "C"))
+    melt(dt, id.vars = id_cols, variable.name = "tree", value.name = name)
   })
+
+  # Combine the tables into a single data.table
+  combined_data <- Reduce(function(x, y) {
+    id_cols <- intersect(colnames(x), colnames(y)) # Find common columns
+    merge(x, y, by = id_cols, all = TRUE)
+  }, data_list)
+
+  # Set factor columns
+  factors <- c("block", "plot", "pot", "treatment")
+  combined_data[, (factors) := lapply(.SD, as.factor), .SDcols = factors]
+
+  # Create duration column from treatment if not there already
+  if (!"duration" %in% colnames(combined_data)) {
+    combined_data[, duration := case_when(
+      grepl("0", treatment) ~ 0,
+      grepl("1", treatment) ~ 1,
+      grepl("2", treatment) ~ 2,
+      grepl("3", treatment) ~ 4,
+      grepl("4", treatment) ~ 8,
+      TRUE ~ NA_real_
+    )]
+  }
 
 }
 
 # Experiment 1
 
-E1 <- list(
-  metadata = fread(),
+E1_2023 <- load_data("2023 E1 growth measurements.xlsx", c(
+  "d_spring", "d_fall", "h_spring", "h_fall", "health_fall",
+  "mainstem", "peripheral", "inoc_points", "aborted", "inoc_cankers"
+))
 
-)
+# Combine diameter and height measurements
+E1_2023[, diameter := coalesce(d_spring, d_fall)]
+E1_2023[, height   := coalesce(h_spring, h_fall)]
+E1_2023[, c("d_spring", "d_fall", "h_spring", "h_fall") := NULL]
+
+# Rename health_fall to health
+E1_2023[, health := health_fall][, health_fall := NULL]
+
+# Add total_cankers column
+E1_2023[,
+  total_cankers := rowSums(.SD, na.rm = TRUE),
+  .SDcols = c("mainstem", "peripheral")
+]
+
+# head(E1_2023)
+
+# View(E1_2023)
+
+```
+
+```{r plots}
+
+# Summarise data by plot, taking the sum of canker measurements
+E1_canker_summary <- E1_2023[, .(
+  mainstem = sum(mainstem, na.rm = TRUE),
+  peripheral = sum(peripheral, na.rm = TRUE),
+  total_cankers = sum(total_cankers, na.rm = TRUE)
+), by = .(block, plot, duration)]
+
+E1_canker_summary
+# Quick boxplot of total_cankers by treatment
+
+ggboxplot(E1_canker_summary, x = "duration", y = "total_cankers",
+  color = "duration", palette = "jco",
+  add = "jitter",
+  title = "Total Cankers by Treatment",
+  xlab = "Treatment", ylab = "Total Cankers"
+) + theme(legend.position = "none")
 
 ```
 
