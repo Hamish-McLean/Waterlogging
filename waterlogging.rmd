@@ -1,0 +1,65 @@
+---
+title: "Waterlogging Analysis"
+author: "Hamish McLean"
+date: "`r format(Sys.Date(),  '%Y-%m-%d')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r load_packages}
+
+library(data.table)
+library(here)
+library(readxl)
+
+```
+
+```{r constants}
+
+here <- here::here()
+data_dir <- file.path(here, "..", "Data")
+figures_dir <- file.path(here, "figures")
+
+```
+
+```{r load_data}
+
+#' Load data from excel file
+#' @param filename The name of the excel file to load.
+#' @param sheets A vector of sheet names to load.
+#' @return A single data.table containing the data from all sheets.
+load_data <- function(filename, sheets) {
+
+  # Check if the file exists
+  file_path <- file.path(data_dir, filename)
+  if (!file.exists(file_path)) {
+    stop(paste("File not found:", file_path))
+  }
+
+  # Read the sheets into a list of data.tables
+  data_list <- lapply(sheets, function(sheet) {
+    sheet_data <- read_excel(file_path, sheet = sheet)
+    setDT(sheet_data)
+    return(sheet_data)
+  })
+
+  # Convert tables to long format
+  data_list <- lapply(data_list, function(dt) {
+    dt_long <- melt(dt, id.vars = c("ID", "Date"), variable.name = "Variable", value.name = "Value")
+    return(dt_long)
+  })
+
+}
+
+# Experiment 1
+
+E1 <- list(
+  metadata = fread(),
+
+)
+
+```
+
