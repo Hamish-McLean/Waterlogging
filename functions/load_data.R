@@ -37,13 +37,16 @@ load_data <- function(dir, filename, sheets = NULL) {
   # Read the sheets into a list of data.tables
   data_list <- setNames(lapply(sheets, function(sheet) {
     setDT(read_excel(file_path, sheet = sheet,
-      na = c("", "na", "NA", "N/A", "<NA>", "NaN", "NULL")
+      na = c("", "na", "NA", "N/A", "#N/A", "<NA>", "NaN", "NULL")
     ))
   }), sheets)
 
   # Convert tables to long format
   data_list <- lapply(names(data_list), function(name) {
     dt <- data_list[[name]]
+    if (all(c("A", "B", "C") %in% colnames(dt))) {
+      return(dt)
+    }
     id_cols <- setdiff(colnames(dt), c("A", "B", "C"))
     melt(dt, id.vars = id_cols, variable.name = "tree", value.name = name)
   })
@@ -57,7 +60,12 @@ load_data <- function(dir, filename, sheets = NULL) {
   }, data_list)
 
   # Set factor columns
-  factors <- c("block", "plot", "pot", "treatment")
+  factors <- c(
+    "block", "split-plot", "plot",
+    "pot", "genotype", "season", "treatment"
+  )
+  # Only use columns that exist
+  factors <- intersect(factors, colnames(combined_data))
   combined_data[, (factors) := lapply(.SD, as.factor), .SDcols = factors]
 
   # Create duration column from treatment if not there already

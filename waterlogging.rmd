@@ -17,7 +17,7 @@ library(ggpubr)
 library(here)
 library(readxl)
 
-source(here("R", "functions.R"))
+source(here("functions", "load_data.R"))
 
 ```
 
@@ -35,8 +35,8 @@ figures_dir <- file.path(here, "figures")
 
 ```{r load_data_E1}
 
-E1_2023 <- load_data(
-  data_dir, "2023 E1 growth measurements.xlsx", 
+e1_2023 <- load_data(
+  data_dir, "2023 E1 growth measurements.xlsx",
   c(
     "d_spring", "d_fall", "h_spring", "h_fall", "health_fall",
     "mainstem", "peripheral", "inoc_points", "aborted", "inoc_cankers"
@@ -44,43 +44,40 @@ E1_2023 <- load_data(
 )
 
 # Combine diameter and height measurements
-E1_2023[, diameter := coalesce(d_spring, d_fall)]
-E1_2023[, height   := coalesce(h_spring, h_fall)]
-E1_2023[, c("d_spring", "d_fall", "h_spring", "h_fall") := NULL]
+e1_2023[, diameter := coalesce(d_spring, d_fall)]
+e1_2023[, height   := coalesce(h_spring, h_fall)]
+e1_2023[, c("d_spring", "d_fall", "h_spring", "h_fall") := NULL]
 
 # Rename health_fall to health
-E1_2023[, health := health_fall][, health_fall := NULL]
+e1_2023[, health := health_fall][, health_fall := NULL]
 
 # Calculate total cankers
-E1_2023[,
+e1_2023[,
   cankers := rowSums(.SD, na.rm = FALSE),
   .SDcols = c("mainstem", "peripheral")
 ]
 
-E1_2024_cankers <- load_data(
-  data_dir, "2024-09-23 E1 canker assessment.xlsx", 
+e1_2024_cankers <- load_data(
+  data_dir, "2024-09-23 E1 canker assessment.xlsx",
   c("cankers", "health")
 )
 
-E1_2024_growth <- load_data(
-  data_dir, "2024-11 E1 growth measurements.xlsx", 
+e1_2024_growth <- load_data(
+  data_dir, "2024-11 E1 growth measurements.xlsx",
   c("diameter", "height", "health")
 )
 
 # Combine E1 tables
-E1 <- Reduce(
+e1 <- Reduce(
   function(x, y) {
-    # Find common columns to merge on
+    # Merge on common columns
     common_cols <- intersect(colnames(x), colnames(y))
-    # Merge the data.tables on common columns
     merge(x, y, by = common_cols, all = TRUE)
   }, 
-  list(E1_2023, E1_2024_cankers, E1_2024_growth)
+  list(e1_2023, e1_2024_cankers, e1_2024_growth)
 )
 
-head(E1)
-
-
+head(e1)
 
 ```
 
@@ -88,23 +85,76 @@ head(E1)
 
 ```{r load_data_E2}
 
+e2_2024_05 <- load_data(
+  data_dir, "2024-05 E2 growth measurements.xlsx", c("diameter")
+)
 
+e2_2024_09_cankers <- load_data(
+  data_dir, "2024-09-24 E2 canker assessment.xlsx", c(
+    "rasp_inoculations", "rasp_cankers",
+    "leaf_scar_inoculations", "leaf_scar_cankers", "health"
+  )
+)
+
+e2_2024_12_growth <- load_data(
+  data_dir, "2024-12 E2 growth measurements.xlsx",
+  c("diameter", "height", "feather", "health")
+)
+
+# Combine E2 tables
+
+e2 <- Reduce(
+  function(x, y) {
+    # Merge on common columns
+    common_cols <- intersect(colnames(x), colnames(y))
+    merge(x, y, by = common_cols, all = TRUE)
+  }, 
+  list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth)
+)
+
+head(e2)
+
+View(e2)
 
 ```
+
+### Experiment 3
+
+```{r load_data_E3}
+
+e3_2024_10_growth <- load_data(
+  data_dir, "2024-10 E3 growth measurements.xlsx", "data"
+)
+
+head(e3_2024_10_growth)
+
+```
+
+### Experiment 4
+
+```{r load_data_E4}
+
+e4_2024_12_growth <- load_data(
+  data_dir, "2024-12 E4 growth measurements.xlsx", c("diameter")
+)
+
+```
+
+## Plots
 
 ```{r plots}
 
 # Summarise data by plot, taking the sum of canker measurements
-E1_canker_summary <- E1_2023[, .(
+e1_canker_summary <- E1_2023[, .(
   mainstem = sum(mainstem, na.rm = TRUE),
   peripheral = sum(peripheral, na.rm = TRUE),
   total_cankers = sum(total_cankers, na.rm = TRUE)
 ), by = .(block, plot, duration)]
 
-E1_canker_summary
+e1_canker_summary
 # Quick boxplot of total_cankers by treatment
 
-ggboxplot(E1_canker_summary, x = "duration", y = "total_cankers",
+ggboxplot(e1_canker_summary, x = "duration", y = "total_cankers",
   color = "duration", palette = "jco",
   add = "jitter",
   title = "Total Cankers by Treatment",
