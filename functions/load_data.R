@@ -16,6 +16,7 @@ library(readxl)
 #' @import data.table
 #' @importFrom readxl read_excel
 #' @import dplyr
+#'
 load_data <- function(dir, filename, sheets = NULL) {
 
   # Check if the file exists
@@ -32,7 +33,7 @@ load_data <- function(dir, filename, sheets = NULL) {
     } else {
       stop("Multiple sheets detected. Please specify the sheets to load.")
     }
-  } 
+  }
 
   # Read the sheets into a list of data.tables
   data_list <- setNames(lapply(sheets, function(sheet) {
@@ -45,10 +46,21 @@ load_data <- function(dir, filename, sheets = NULL) {
   data_list <- lapply(names(data_list), function(name) {
     dt <- data_list[[name]]
     if (all(c("A", "B", "C") %in% colnames(dt))) {
-      return(dt)
+      id_cols <- setdiff(colnames(dt), c("A", "B", "C"))
+      melt(dt, id.vars = id_cols, variable.name = "tree", value.name = name)
+    } else {
+      dt
     }
-    id_cols <- setdiff(colnames(dt), c("A", "B", "C"))
-    melt(dt, id.vars = id_cols, variable.name = "tree", value.name = name)
+  })
+
+  # Replace date with year and assessment (A for Jan-July, B for Aug-Dec)
+  data_list <- lapply(data_list, function(dt) {
+    if ("date" %in% colnames(dt)) {
+      dt[, year := as.integer(format(date, "%Y"))]
+      dt[, assessment := ifelse(as.integer(format(date, "%m")) <= 7, "A", "B")]
+      dt[, date := NULL] # Remove the original date column
+    }
+    dt
   })
 
   # Combine the tables into a single data.table

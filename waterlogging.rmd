@@ -17,15 +17,19 @@ library(ggpubr)
 library(here)
 library(readxl)
 
-source(here("functions", "load_data.R"))
-
 ```
 
 ```{r constants}
 
-here        <- here::here()
-data_dir    <- file.path(here, "..", "Data")
-figures_dir <- file.path(here, "figures")
+# Set the working directory to the project root
+here::set_here()
+
+# Set data and figures directories
+data_dir    <- here("..", "Data")
+figures_dir <- here("figures")
+
+# Load custom functions
+source(here("functions", "load_data.R"))
 
 ```
 
@@ -58,8 +62,7 @@ e1_2023[,
 ]
 
 e1_2024_cankers <- load_data(
-  data_dir, "2024-09-23 E1 canker assessment.xlsx",
-  c("cankers", "health")
+  data_dir, "2024-09-23 E1 canker assessment.xlsx", "cankers"
 )
 
 e1_2024_growth <- load_data(
@@ -73,7 +76,7 @@ e1 <- Reduce(
     # Merge on common columns
     common_cols <- intersect(colnames(x), colnames(y))
     merge(x, y, by = common_cols, all = TRUE)
-  }, 
+  },
   list(e1_2023, e1_2024_cankers, e1_2024_growth)
 )
 
@@ -86,7 +89,7 @@ head(e1)
 ```{r load_data_E2}
 
 e2_2024_05 <- load_data(
-  data_dir, "2024-05 E2 growth measurements.xlsx", c("diameter")
+  data_dir, "2024-05 E2 growth measurements.xlsx", "diameter"
 )
 
 e2_2024_09_cankers <- load_data(
@@ -126,7 +129,7 @@ e3_2024_10_growth <- load_data(
   data_dir, "2024-10 E3 growth measurements.xlsx", "data"
 )
 
-head(e3_2024_10_growth)
+# head(e3_2024_10_growth)
 
 ```
 
@@ -138,6 +141,32 @@ e4_2024_12_growth <- load_data(
   data_dir, "2024-12 E4 growth measurements.xlsx", c("diameter")
 )
 
+# head(e4_2024_12_growth)
+
+```
+
+## Tree health
+
+```{r tree_health}
+
+# Summarise tree health
+e1[!is.na(health), .(health = paste0(health, collapse = ",")), by = .(tree, pot)]$health
+
+# e1[, health_list := list(list(health[!is.na(health)])), by = .(tree, pot)]
+
+# Plot tree health
+
+```
+
+## Data cleaning
+
+```{r data_cleaning}
+
+# Remove dead trees
+e1 <- e1[health != "dead"]
+
+
+
 ```
 
 ## Plots
@@ -145,16 +174,18 @@ e4_2024_12_growth <- load_data(
 ```{r plots}
 
 # Summarise data by plot, taking the sum of canker measurements
-e1_canker_summary <- E1_2023[, .(
-  mainstem = sum(mainstem, na.rm = TRUE),
-  peripheral = sum(peripheral, na.rm = TRUE),
-  total_cankers = sum(total_cankers, na.rm = TRUE)
-), by = .(block, plot, duration)]
+e1_canker_summary <- e1[
+  !is.na(cankers), .(block, plot, duration, cankers, inoc_points)
+][, .(
+  cankers = sum(cankers, na.rm = TRUE),
+  inoc_points = sum(inoc_points, na.rm = TRUE),
+  N = .N
+), by = .(block, plot, duration)][, proportion := cankers / inoc_points]
 
 e1_canker_summary
 # Quick boxplot of total_cankers by treatment
 
-ggboxplot(e1_canker_summary, x = "duration", y = "total_cankers",
+ggboxplot(e1_canker_summary, x = "duration", y = "proportion",
   color = "duration", palette = "jco",
   add = "jitter",
   title = "Total Cankers by Treatment",
