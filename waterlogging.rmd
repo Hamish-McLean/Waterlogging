@@ -80,6 +80,9 @@ e1 <- Reduce(
   list(e1_2023, e1_2024_cankers, e1_2024_growth)
 )
 
+# Add experiment id column
+e1[, experiment := "E1"]
+
 head(e1)
 
 ```
@@ -95,7 +98,7 @@ e2_2024_05 <- load_data(
 e2_2024_09_cankers <- load_data(
   data_dir, "2024-09-24 E2 canker assessment.xlsx", c(
     "rasp_inoculations", "rasp_cankers",
-    "leaf_scar_inoculations", "leaf_scar_cankers", "health"
+    "leaf_scar_inoculations", "leaf_scar_cankers"
   )
 )
 
@@ -111,13 +114,16 @@ e2 <- Reduce(
     # Merge on common columns
     common_cols <- intersect(colnames(x), colnames(y))
     merge(x, y, by = common_cols, all = TRUE)
-  }, 
+  },
   list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth)
 )
 
+# Add experiment id column
+e2[, experiment := "E2"]
+
 head(e2)
 
-View(e2)
+# View(e2)
 
 ```
 
@@ -149,27 +155,221 @@ e4_2024_12_growth <- load_data(
 
 ```{r tree_health}
 
-# Summarise tree health
-e1[!is.na(health), .(health = paste0(health, collapse = ",")), by = .(tree, pot)]$health
+#' @title Summarise tree health
+#'
+summarise_tree_health <- function(data) {
 
-# e1[, health_list := list(list(health[!is.na(health)])), by = .(tree, pot)]
+  # Check columns
+  if (!all(c(
+    "experiment", "timepoint", "duration", "health"
+  ) %in% colnames(data))) {
+    stop("Input data does not contain required columns.")
+  }
 
-# Plot tree health
+  data_copy <- copy(data[, .(experiment, timepoint, duration, health)])
+
+  # Combine health categories
+  health_mapping <- list(
+    healthy = c("healthy", "top_broken", "broken"),
+    unhealthy = c("nearly_dead", "unhealthy", "top_dead", "broken")
+  )
+  data_copy[, health := fcase(
+    health %in% health_mapping$healthy, "healthy",
+    health %in% health_mapping$unhealthy, "unhealthy",
+    rep(TRUE, .N), health # Keep other categories unchanged
+  )]
+
+  health_summary <- data_copy[!is.na(health), .N, by = .(
+    experiment, timepoint, duration, health
+  )]
+  health_combinations <- CJ(
+    experiment = unique(data_copy$experiment),
+    timepoint = unique(data_copy$timepoint),
+    duration = unique(data_copy$duration),
+    health = c("healthy", "unhealthy", "dead", "missing")
+  )
+  health_summary <- merge(
+    health_combinations,
+    health_summary,
+    by = c("experiment", "timepoint", "duration", "health"),
+    all.x = TRUE
+  )
+  health_summary[is.na(N), N := 0] # Replace NA with 0 for missing combinations
+
+  health_summary[, health := factor(
+    health, levels = c("healthy", "unhealthy", "dead", "missing")
+  )]
+
+}
+
+e1_health_summary <- summarise_tree_health(e1)
+
+e2_health_summary <- summarise_tree_health(e2)
+
+
+
+plot_tree_health <- function(health_summary) {
+  ggbarplot(
+    health_summary,
+    x = "health",          # Treatments on the x-axis
+    y = "N",                 # Count of trees on the y-axis
+    fill = "timepoint",         # Separate bars by health category
+    color = "timepoint",        # Add color to distinguish health categories
+    position = position_dodge(0.8), # Dodge bars for better separation
+    # palette = ""          # Use a predefined color palette
+  ) +
+    facet_grid(cols = vars(duration), rows = vars(experiment)) +
+    labs(
+      title = "Tree Health by Treatment",
+      x = "Treatment Duration",
+      y = "Number of Trees"
+      # fill = "Health Category"
+    ) +
+    theme_minimal()
+}
+
+# plot_tree_health(e1_health_summary)
+
+# plot_tree_health(e2_health_summary)
+
+plot_tree_health(bind_rows(e1_health_summary, e2_health_summary))
+
 
 ```
 
 ## Data cleaning
 
+Remove pots with 2 or more dead or missing trees.
+Remove dead trees.
+Remove E2 pot 33
+
 ```{r data_cleaning}
 
-# Remove dead trees
-e1 <- e1[health != "dead"]
+# Remove pots with 2 or more dead or missing trees
+remove_dead_pots <- function(data) {
+  pots_to_remove <- unique(data[
+    health == "dead" | health == "missing", .N, by = .(pot, timepoint)
+  ][N >= 2, .(pot)])
 
+  cat(
+    "Removed", nrow(pots_to_remove),
+    "pots with 2 or more dead or missing trees\n\n"
+  )
+
+  data[!.(pots_to_remove), on = .(pot)]
+}
+
+e1 <- remove_dead_pots(e1)
+e2 <- remove_dead_pots(e2)
+
+# Remove dead trees
+remove_dead_trees <- function(data) {
+  trees_to_remove <- data[health == "dead" | health == "missing"]
+  cat("Removed", nrow(trees_to_remove), "remaining dead or missing trees\n\n")
+  data[!.(trees_to_remove)]
+}
+
+e1 <- remove_dead_trees(e1)
+e2 <- remove_dead_trees(e2)
+
+# Remove E1 8 week duration
+e1 <- e1[duration != 8]
+
+# Remove E2 pot 33
+e2 <- e2[pot != 33]
+
+```
+
+## Growth
+
+### Diameter
+
+```{r diameter}
+
+# Summarise diameter
+e1_diameter_summary <- e1[
+  !is.na(diameter), .(timepoint, duration, diameter)
+][, .(
+  diameter = mean(diameter, na.rm = TRUE),
+  N = .N,
+  sd = sd(diameter, na.rm = TRUE)
+), by = .(duration, timepoint)]
+
+e1_diameter_summary[, duration := factor(duration)]
+
+# Plot diameter against timepoint for each treatment
+ggline(
+  e1_diameter_summary,
+  x = "timepoint",
+  y = "diameter",
+  color = "duration"
+) +
+  labs(
+    title = "Diameter by Treatment",
+    x = "Timepoint",
+    y = "Diameter (mm)"
+  )
 
 
 ```
 
-## Plots
+### Height
+
+```{r height}
+
+top_removals <- c("top_broken", "top_missing")
+
+# Sumarise height
+e1_height_summary <- e1[
+  !is.na(height) & !(health %in% top_removals), .(timepoint, duration, height)
+][, .(
+  height = mean(height, na.rm = TRUE),
+  N = .N,
+  sd = sd(height, na.rm = TRUE)
+), by = .(duration, timepoint)][, duration := factor(duration)]
+
+ggline(
+  e1_height_summary,
+  x = "timepoint",
+  y = "height",
+  color = "duration"
+) +
+  labs(
+    title = "Height by Treatment",
+    x = "Timepoint",
+    y = "Height (cm)"
+  )
+
+```
+
+### Feather
+
+```{r feather}
+
+# Summarise feather
+e1_feather_summary <- e1[
+  !is.na(feather) & !(health %in% top_removals), .(timepoint, duration, feather)
+][, .(
+  feather = mean(feather, na.rm = TRUE),
+  N = .N,
+  sd = sd(feather, na.rm = TRUE)
+), by = .(duration, timepoint)][, duration := factor(duration)]
+
+ggline(
+  e1_feather_summary,
+  x = "timepoint",
+  y = "feather",
+  color = "duration"
+) +
+  labs(
+    title = "Feather by Treatment",
+    x = "Timepoint",
+    y = "Feather (cm)"
+  )
+
+```
+
+## Canker
 
 ```{r plots}
 
@@ -193,4 +393,3 @@ ggboxplot(e1_canker_summary, x = "duration", y = "proportion",
 ) + theme(legend.position = "none")
 
 ```
-

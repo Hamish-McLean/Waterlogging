@@ -1,7 +1,3 @@
-library(data.table)
-library(dplyr)
-library(readxl)
-
 #' @title Load Data from Excel File
 #'
 #' @description
@@ -18,6 +14,10 @@ library(readxl)
 #' @import dplyr
 #'
 load_data <- function(dir, filename, sheets = NULL) {
+
+  require(data.table)
+  require(readxl)
+  require(dplyr)
 
   # Check if the file exists
   file_path <- file.path(dir, filename)
@@ -73,8 +73,8 @@ load_data <- function(dir, filename, sheets = NULL) {
 
   # Set factor columns
   factors <- c(
-    "block", "split-plot", "plot",
-    "pot", "genotype", "season", "treatment"
+    "block", "split-plot", "plot", "pot", "genotype", "season",
+    "treatment", "tree", "timepoint", "year", "assessment", "duration"
   )
   # Only use columns that exist
   factors <- intersect(factors, colnames(combined_data))
