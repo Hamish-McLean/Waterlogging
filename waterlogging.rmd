@@ -11,10 +11,14 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 ```{r load_packages}
 
+library(car)
 library(data.table)
 library(dplyr)
+library(emmeans)
 library(ggpubr)
+library(glmmTMB)
 library(here)
+library(lme4)
 library(readxl)
 
 ```
@@ -83,8 +87,6 @@ e1 <- Reduce(
 # Add experiment id column
 e1[, experiment := "E1"]
 
-head(e1)
-
 ```
 
 ### Experiment 2
@@ -120,10 +122,6 @@ e2 <- Reduce(
 
 # Add experiment id column
 e2[, experiment := "E2"]
-
-head(e2)
-
-# View(e2)
 
 ```
 
@@ -282,34 +280,85 @@ e2 <- e2[pot != 33]
 
 ## Growth
 
+```{r growth functions}
+
+#' @title Summarise growth data
+#'
+summarise_growth <- function(data, measurement, remove_health = NULL) {
+  # Check columns
+  if (!all(c(
+    "experiment", "timepoint", "duration", measurement
+  ) %in% colnames(data))) {
+    stop("Input data does not contain required columns.")
+  }
+
+  # Summarise data by measurement
+  data[
+    !is.na(get(measurement)) & !(health %in% remove_health),
+    .(
+      mean = mean(get(measurement), na.rm = TRUE),
+      N = .N,
+      sd = sd(get(measurement), na.rm = TRUE)
+    ),
+    by = .(experiment, timepoint, duration)
+  ][, duration := factor(duration)]
+}
+
+#' @title Plot growth data
+#'
+plot_growth <- function(data, measurement) {
+  ggline(
+    data,
+    x = "timepoint",
+    y = "mean",
+    color = "duration"
+  ) +
+    labs(
+      title = paste(measurement, "by Treatment"),
+      x = "Timepoint",
+      y = measurement
+    )
+}
+
+```
+
 ### Diameter
 
 ```{r diameter}
 
-# Summarise diameter
-e1_diameter_summary <- e1[
-  !is.na(diameter), .(timepoint, duration, diameter)
-][, .(
-  diameter = mean(diameter, na.rm = TRUE),
-  N = .N,
-  sd = sd(diameter, na.rm = TRUE)
-), by = .(duration, timepoint)]
+# E1 diameter
+plot_growth(
+  summarise_growth(e1, "diameter"),
+  "diameter"
+)
 
-e1_diameter_summary[, duration := factor(duration)]
+# E2 diameter
+plot_growth(
+  summarise_growth(e2, "diameter"),
+  "diameter"
+)
 
-# Plot diameter against timepoint for each treatment
-ggline(
-  e1_diameter_summary,
-  x = "timepoint",
-  y = "diameter",
-  color = "duration"
-) +
-  labs(
-    title = "Diameter by Treatment",
-    x = "Timepoint",
-    y = "Diameter (mm)"
-  )
+# Models
 
+# E1 diameter
+
+e1_diameter_model <- lmer(
+  diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
+  data = e1[, duration := factor(duration)]
+)
+summary(e1_diameter_model)
+Anova(e1_diameter_model, type = 3)
+emmeans(e1_diameter_model, ~ duration | timepoint)
+# emmeans(e1_diameter_model, pairwise ~ duration | timepoint)
+
+
+e2_diameter_model <- lmer(
+  diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
+  data = e2[, duration := factor(duration)]
+)
+summary(e2_diameter_model)
+Anova(e2_diameter_model, type = 3)
+emmeans(e2_diameter_model, ~ duration | timepoint)
 
 ```
 
@@ -319,59 +368,71 @@ ggline(
 
 top_removals <- c("top_broken", "top_missing")
 
-# Sumarise height
-e1_height_summary <- e1[
-  !is.na(height) & !(health %in% top_removals), .(timepoint, duration, height)
-][, .(
-  height = mean(height, na.rm = TRUE),
-  N = .N,
-  sd = sd(height, na.rm = TRUE)
-), by = .(duration, timepoint)][, duration := factor(duration)]
+# E1 height
+plot_growth(
+  summarise_growth(e1, "height", top_removals),
+  "height"
+)
 
-ggline(
-  e1_height_summary,
-  x = "timepoint",
-  y = "height",
-  color = "duration"
-) +
-  labs(
-    title = "Height by Treatment",
-    x = "Timepoint",
-    y = "Height (cm)"
-  )
+# E1 height model
+e1_height_model <- lmer(
+  height ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
+  data = e1[!(health %in% top_removals), duration := factor(duration)]
+)
+summary(e1_height_model)
+Anova(e1_height_model, type = 3)
+emmeans(e1_height_model, ~ duration | timepoint)
+
+# E2 height
+# plot_growth(
+#   summarise_growth(e2, "height", top_removals),
+#   "height"
+# )
 
 ```
 
-### Feather
+### Extension
 
-```{r feather}
+```{r extension}
 
 # Summarise feather
-e1_feather_summary <- e1[
-  !is.na(feather) & !(health %in% top_removals), .(timepoint, duration, feather)
+e2_feather_summary <- e2[
+  !is.na(feather) & !(health %in% top_removals),
+  .(block, plot, duration, feather)
 ][, .(
   feather = mean(feather, na.rm = TRUE),
   N = .N,
   sd = sd(feather, na.rm = TRUE)
-), by = .(duration, timepoint)][, duration := factor(duration)]
+), by = .(block, plot, duration)][, duration := factor(duration)]
 
-ggline(
-  e1_feather_summary,
-  x = "timepoint",
+ggboxplot(
+  e2_feather_summary,
+  x = "duration",
   y = "feather",
-  color = "duration"
+  color = "duration",
+  add = "jitter"
 ) +
   labs(
-    title = "Feather by Treatment",
-    x = "Timepoint",
-    y = "Feather (cm)"
+    title = "Extension by Treatment",
+    x = "Waterlogging duration (weeks)",
+    y = "Extension (cm)"
   )
+
+# E2 extension model
+e2_extension_model <- lmer(
+  feather ~ duration + (1 | block),
+  data = e2[!(health %in% top_removals), duration := factor(duration)]
+)
+
+summary(e2_extension_model)
+Anova(e2_extension_model, type = 3)
+emmeans(e2_extension_model, ~ duration)
 
 ```
 
 ## Canker
 
-```{r plots}
+```{r canker}
 
 # Summarise data by plot, taking the sum of canker measurements
 e1_canker_summary <- e1[
@@ -382,7 +443,6 @@ e1_canker_summary <- e1[
   N = .N
 ), by = .(block, plot, duration)][, proportion := cankers / inoc_points]
 
-e1_canker_summary
 # Quick boxplot of total_cankers by treatment
 
 ggboxplot(e1_canker_summary, x = "duration", y = "proportion",
@@ -391,5 +451,50 @@ ggboxplot(e1_canker_summary, x = "duration", y = "proportion",
   title = "Total Cankers by Treatment",
   xlab = "Treatment", ylab = "Total Cankers"
 ) + theme(legend.position = "none")
+
+e1_canker_model <- glmmTMB(
+  cbind(inoc_cankers, inoc_points - inoc_cankers) ~ duration + (1 | block) + (1 | tree),
+  family = betabinomial(link = "logit"),
+  data = e1[!is.na(inoc_cankers)][, duration := factor(duration)]
+)
+
+summary(e1_canker_model)
+Anova(e1_canker_model, type = 3)
+emmeans(e1_canker_model, ~ duration)
+
+# E2 cankers
+
+e2_canker_summary <- e2[
+  !is.na(rasp_inoculations), .(
+    block, plot, duration,
+    rasp_cankers, rasp_inoculations
+  )
+][, .(
+  rasp_cankers = sum(rasp_cankers, na.rm = TRUE),
+  rasp_inoculations = sum(rasp_inoculations, na.rm = TRUE),
+  N = .N
+), by = .(block, plot, duration)][,
+  proportion := rasp_cankers / rasp_inoculations
+]
+
+# Plot E2 cankers
+ggboxplot(e2_canker_summary,
+  x = "duration", y = "proportion",
+  color = "duration", palette = "jco",
+  add = "jitter",
+  title = "Proportion of cankers by Treatment",
+  xlab = "Waterlogging duration (weeks)", ylab = "Cankers per inoculation point"
+) + theme(legend.position = "none")
+
+
+e2_canker_model <- glmmTMB(
+  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block) + (1 | tree),
+  family = betabinomial(link = "logit"),
+  data = e2[!is.na(rasp_cankers)][, duration := factor(duration)]
+)
+
+summary(e2_canker_model)
+Anova(e2_canker_model, type = 3)
+emmeans(e2_canker_model, ~ duration)
 
 ```

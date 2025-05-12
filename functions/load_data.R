@@ -47,10 +47,18 @@ load_data <- function(dir, filename, sheets = NULL) {
     dt <- data_list[[name]]
     if (all(c("A", "B", "C") %in% colnames(dt))) {
       id_cols <- setdiff(colnames(dt), c("A", "B", "C"))
-      melt(dt, id.vars = id_cols, variable.name = "tree", value.name = name)
+      melt(dt, id.vars = id_cols, variable.name = "inoculation", value.name = name)
     } else {
       dt
     }
+  })
+
+  # Add tree ID column by combining pot with inoculation
+  data_list <- lapply(data_list, function(dt) {
+    if ("inoculation" %in% colnames(dt)) {
+      dt[, tree := paste0(pot, inoculation)]
+    }
+    dt
   })
 
   # Replace date with year and assessment (A for Jan-July, B for Aug-Dec)
@@ -73,8 +81,8 @@ load_data <- function(dir, filename, sheets = NULL) {
 
   # Set factor columns
   factors <- c(
-    "block", "split-plot", "plot", "pot", "genotype", "season",
-    "treatment", "tree", "timepoint", "year", "assessment", "duration"
+    "block", "split-plot", "plot", "pot", "genotype", "tree", "season",
+    "treatment", "inoculation", "timepoint", "year", "assessment", "duration"
   )
   # Only use columns that exist
   factors <- intersect(factors, colnames(combined_data))
