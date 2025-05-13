@@ -13,12 +13,14 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 library(car)
 library(data.table)
+library(DHARMa)
 library(dplyr)
 library(emmeans)
 library(ggpubr)
 library(glmmTMB)
 library(here)
 library(lme4)
+library(performance)
 library(readxl)
 
 ```
@@ -26,7 +28,7 @@ library(readxl)
 ```{r constants}
 
 # Set the working directory to the project root
-here::set_here()
+# here::set_here()
 
 # Set data and figures directories
 data_dir    <- here("..", "Data")
@@ -34,6 +36,10 @@ figures_dir <- here("figures")
 
 # Load custom functions
 source(here("functions", "load_data.R"))
+
+latte <- list(
+  red = "#d20f39"
+)
 
 ```
 
@@ -346,6 +352,22 @@ e1_diameter_model <- lmer(
   diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
   data = e1[, duration := factor(duration)]
 )
+
+# Check model assumptions
+check_model(e1_diameter_model)
+
+Plot residuals vs fitted values
+# plot(
+#   fitted(e1_diameter_model), residuals(e1_diameter_model),
+#     xlab = "Fitted Values", ylab = "Conditional Residuals",
+#     main = "Residuals vs. Fitted"
+# )
+# abline(h = 0, col = latte$red, lty = 2)
+
+# # Q-Q plot
+# qqnorm(residuals(e1_diameter_model))
+# qqline(residuals(e1_diameter_model), col = latte$red)
+
 summary(e1_diameter_model)
 Anova(e1_diameter_model, type = 3)
 emmeans(e1_diameter_model, ~ duration | timepoint)
@@ -379,6 +401,10 @@ e1_height_model <- lmer(
   height ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
   data = e1[!(health %in% top_removals), duration := factor(duration)]
 )
+
+# Check model assumptions
+check_model(e1_height_model)
+
 summary(e1_height_model)
 Anova(e1_height_model, type = 3)
 emmeans(e1_height_model, ~ duration | timepoint)
@@ -421,8 +447,11 @@ ggboxplot(
 # E2 extension model
 e2_extension_model <- lmer(
   feather ~ duration + (1 | block),
-  data = e2[!(health %in% top_removals), duration := factor(duration)]
+  data = e2[!(health %in% top_removals)][, duration := factor(duration)]
 )
+
+# Check model assumptions
+check_model(e2_extension_model)
 
 summary(e2_extension_model)
 Anova(e2_extension_model, type = 3)
@@ -458,6 +487,9 @@ e1_canker_model <- glmmTMB(
   data = e1[!is.na(inoc_cankers)][, duration := factor(duration)]
 )
 
+# Check model assumptions
+plot(simulateResiduals(e1_canker_model))
+
 summary(e1_canker_model)
 Anova(e1_canker_model, type = 3)
 emmeans(e1_canker_model, ~ duration)
@@ -488,10 +520,13 @@ ggboxplot(e2_canker_summary,
 
 
 e2_canker_model <- glmmTMB(
-  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block) + (1 | tree),
+  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block) + (1 | tree) + (1 | pot),
   family = betabinomial(link = "logit"),
   data = e2[!is.na(rasp_cankers)][, duration := factor(duration)]
 )
+
+# Check model assumptions
+plot(simulateResiduals(e2_canker_model))
 
 summary(e2_canker_model)
 Anova(e2_canker_model, type = 3)
