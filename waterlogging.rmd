@@ -129,6 +129,15 @@ e2 <- Reduce(
 # Add experiment id column
 e2[, experiment := "E2"]
 
+# Add height at T1 by subtracting feather at T2 from height at T2
+e2 <- merge(
+  e2,
+  e2[(!is.na(height) & !is.na(feather)), .(tree, height = height - feather, timepoint = "T1")],
+  by = c("tree", "timepoint"),
+  all.x = TRUE
+)
+e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+
 ```
 
 ### Experiment 3
@@ -303,6 +312,7 @@ summarise_growth <- function(data, measurement, remove_health = NULL) {
     !is.na(get(measurement)) & !(health %in% remove_health),
     .(
       mean = mean(get(measurement), na.rm = TRUE),
+      median = median(get(measurement), na.rm = TRUE),
       N = .N,
       sd = sd(get(measurement), na.rm = TRUE)
     ),
@@ -349,14 +359,14 @@ plot_growth(
 # E1 diameter
 
 e1_diameter_model <- lmer(
-  diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
+  log(diameter) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
   data = e1[, duration := factor(duration)]
 )
 
 # Check model assumptions
 check_model(e1_diameter_model)
 
-Plot residuals vs fitted values
+# Plot residuals vs fitted values
 # plot(
 #   fitted(e1_diameter_model), residuals(e1_diameter_model),
 #     xlab = "Fitted Values", ylab = "Conditional Residuals",
@@ -375,9 +385,12 @@ emmeans(e1_diameter_model, ~ duration | timepoint)
 
 
 e2_diameter_model <- lmer(
-  diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
+  log(diameter) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
   data = e2[, duration := factor(duration)]
 )
+
+check_model(e2_diameter_model)
+
 summary(e2_diameter_model)
 Anova(e2_diameter_model, type = 3)
 emmeans(e2_diameter_model, ~ duration | timepoint)
@@ -398,7 +411,7 @@ plot_growth(
 
 # E1 height model
 e1_height_model <- lmer(
-  height ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree), # + (timepoint | tree),
+  log(height) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
   data = e1[!(health %in% top_removals), duration := factor(duration)]
 )
 
@@ -410,10 +423,57 @@ Anova(e1_height_model, type = 3)
 emmeans(e1_height_model, ~ duration | timepoint)
 
 # E2 height
-# plot_growth(
-#   summarise_growth(e2, "height", top_removals),
-#   "height"
-# )
+plot_growth(
+  summarise_growth(e2, "height", top_removals),
+  "height"
+)
+
+ggline(
+  summarise_growth(e2, "height", top_removals),
+  x = "timepoint",
+  y = "median",
+  color = "duration"
+) +
+  labs(
+    title = "Height by Treatment",
+    x = "Timepoint",
+    y = "Height (cm)"
+  )
+
+e2_height_summary <- e2[
+  !is.na(height) & !(health %in% top_removals),
+  .(block, plot, duration, height)
+][, .(
+  mean = mean(height, na.rm = TRUE),
+  median = median(height, na.rm = TRUE),
+  N = .N,
+  sd = sd(height, na.rm = TRUE)
+), by = .(block, plot, duration)][, duration := factor(duration)]
+
+ggboxplot(
+  e2_height_summary,
+  x = "duration",
+  y = "median",
+  color = "duration",
+  add = "jitter"
+) +
+  labs(
+    title = "Extension by Treatment",
+    x = "Waterlogging duration (weeks)",
+    y = "Height (cm)"
+  )
+
+# E2 height model
+e2_height_model <- lmer(
+  log(height) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
+  data = e2[!(health %in% top_removals), duration := factor(duration)]
+)
+
+# Check model assumptions
+check_model(e2_height_model)
+
+summary(e2_height_model)
+Anova(e2_height_model, type = 3)
 
 ```
 
@@ -446,7 +506,7 @@ ggboxplot(
 
 # E2 extension model
 e2_extension_model <- lmer(
-  feather ~ duration + (1 | block),
+  log(feather) ~ duration + (1 | block) + (1 | pot),
   data = e2[!(health %in% top_removals)][, duration := factor(duration)]
 )
 
@@ -526,7 +586,9 @@ e2_canker_model <- glmmTMB(
 )
 
 # Check model assumptions
-plot(simulateResiduals(e2_canker_model))
+sim <- simulateResiduals(e2_canker_model)
+plot(sim)
+testZeroInflation(sim)
 
 summary(e2_canker_model)
 Anova(e2_canker_model, type = 3)
