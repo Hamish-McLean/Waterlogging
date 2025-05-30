@@ -14,7 +14,6 @@
 #' @import dplyr
 #'
 load_data <- function(dir, filename, sheets = NULL) {
-
   require(data.table)
   require(readxl)
   require(dplyr)
@@ -36,18 +35,28 @@ load_data <- function(dir, filename, sheets = NULL) {
   }
 
   # Read the sheets into a list of data.tables
-  data_list <- setNames(lapply(sheets, function(sheet) {
-    setDT(read_excel(file_path, sheet = sheet,
-      na = c("", "na", "NA", "N/A", "#N/A", "<NA>", "NaN", "NULL")
-    ))
-  }), sheets)
+  data_list <- setNames(
+    lapply(sheets, function(sheet) {
+      setDT(read_excel(
+        file_path,
+        sheet = sheet,
+        na = c("", "na", "NA", "N/A", "#N/A", "<NA>", "NaN", "NULL")
+      ))
+    }),
+    sheets
+  )
 
   # Convert tables to long format
   data_list <- lapply(names(data_list), function(name) {
     dt <- data_list[[name]]
     if (all(c("A", "B", "C") %in% colnames(dt))) {
       id_cols <- setdiff(colnames(dt), c("A", "B", "C"))
-      melt(dt, id.vars = id_cols, variable.name = "inoculation", value.name = name)
+      melt(
+        dt,
+        id.vars = id_cols,
+        variable.name = "inoculation",
+        value.name = name
+      )
     } else {
       dt
     }
@@ -72,32 +81,50 @@ load_data <- function(dir, filename, sheets = NULL) {
   })
 
   # Combine the tables into a single data.table
-  combined_data <- Reduce(function(x, y) {
-    # Find common columns to merge on
-    common_cols <- intersect(colnames(x), colnames(y))
-    # Merge the data.tables on common columns
-    merge(x, y, by = common_cols, all = TRUE)
-  }, data_list)
+  combined_data <- Reduce(
+    function(x, y) {
+      # Find common columns to merge on
+      common_cols <- intersect(colnames(x), colnames(y))
+      # Merge the data.tables on common columns
+      merge(x, y, by = common_cols, all = TRUE)
+    },
+    data_list
+  )
+
+  # Create duration column from treatment if not there already
+  if (!"duration" %in% colnames(combined_data)) {
+    combined_data[,
+      duration := case_when(
+        grepl("0", treatment) ~ 0,
+        grepl("1", treatment) ~ 1,
+        grepl("2", treatment) ~ 2,
+        grepl("3", treatment) ~ 4,
+        grepl("4", treatment) ~ 8,
+        TRUE ~ NA_real_
+      )
+    ]
+  }
+
+  # Create elapsed_year column from timepoint
+  combined_data[, elapsed_years := as.numeric(gsub("T", "", timepoint))]
 
   # Set factor columns
   factors <- c(
-    "block", "split-plot", "plot", "pot", "genotype", "tree", "season",
-    "treatment", "inoculation", "timepoint", "year", "assessment", "duration"
+    "block",
+    "split-plot",
+    "plot",
+    "pot",
+    "genotype",
+    "tree",
+    "season",
+    "treatment",
+    "inoculation",
+    "timepoint",
+    "year",
+    "assessment",
+    "duration"
   )
   # Only use columns that exist
   factors <- intersect(factors, colnames(combined_data))
   combined_data[, (factors) := lapply(.SD, as.factor), .SDcols = factors]
-
-  # Create duration column from treatment if not there already
-  if (!"duration" %in% colnames(combined_data)) {
-    combined_data[, duration := case_when(
-      grepl("0", treatment) ~ 0,
-      grepl("1", treatment) ~ 1,
-      grepl("2", treatment) ~ 2,
-      grepl("3", treatment) ~ 4,
-      grepl("4", treatment) ~ 8,
-      TRUE ~ NA_real_
-    )]
-  }
-
 }

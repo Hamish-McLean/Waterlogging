@@ -81,14 +81,16 @@ e1_2024_growth <- load_data(
 )
 
 # Combine E1 tables
-e1 <- Reduce(
-  function(x, y) {
-    # Merge on common columns
-    common_cols <- intersect(colnames(x), colnames(y))
-    merge(x, y, by = common_cols, all = TRUE)
-  },
-  list(e1_2023, e1_2024_cankers, e1_2024_growth)
-)
+
+common_cols <- intersect(colnames(e1_2023), colnames(e1_2024_cankers))
+e1 <- merge(e1_2023, e1_2024_cankers, by = common_cols, all = TRUE)
+
+common_cols <- intersect(colnames(e1_2024_cankers), colnames(e1_2024_growth))
+e1 <- merge(e1, e1_2024_growth, by = common_cols, all = TRUE)
+
+e1[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e1[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+e1[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
 
 # Add experiment id column
 e1[, experiment := "E1"]
@@ -125,6 +127,8 @@ e2 <- Reduce(
   },
   list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth)
 )
+
+e2[, timepoint := as.factor(timepoint)]
 
 # Add experiment id column
 e2[, experiment := "E2"]
@@ -184,7 +188,7 @@ summarise_tree_health <- function(data) {
   # Combine health categories
   health_mapping <- list(
     healthy = c("healthy", "top_broken", "broken"),
-    unhealthy = c("nearly_dead", "unhealthy", "top_dead", "broken")
+    unhealthy = c("nearly_dead", "unhealthy", "top_dead")
   )
   data_copy[, health := fcase(
     health %in% health_mapping$healthy, "healthy",
@@ -250,6 +254,53 @@ plot_tree_health(bind_rows(e1_health_summary, e2_health_summary))
 
 ```
 
+## Tree health
+
+```{r tree health}
+
+# Combine E1 and E2
+
+# Class all living trees as healthy
+healthy <-  c(
+  "healthy", "top_broken", "broken", "nearly_dead", "unhealthy", "top_dead"
+)
+
+# Summarise health data for E1 and E2 at T2
+e1_e2_health <- rbind(e1, e2, fill = TRUE)[
+  timepoint == "T2" & !is.na(health),
+  .(healthy = sum(health %in% healthy), dead = sum(health == "dead")),
+  by = .(experiment, block, duration)
+][, experiment := factor(experiment)]
+
+design <- y ~ experiment * duration + (1 | experiment / block)
+
+health_model <- glmmTMB(
+  update(design, cbind(healthy, dead) ~ .),
+  data = e1_e2_health,
+  family = betabinomial(link = "logit")
+)
+
+health_model <- glmer(
+  update(design, cbind(healthy, dead) ~ .),
+  data = e1_e2_health,
+  family = binomial(link = "probit")
+)
+
+# Check model assumptions
+check_model(health_model)
+check_overdispersion(health_model)
+
+sim <- simulateResiduals(health_model)
+plot(sim)
+testDispersion(sim)
+
+summary(health_model)
+Anova(health_model, type = 3)
+# ranova(health_model, type = 3)
+emmeans(health_model, ~ duration | experiment) |> plot()
+
+```
+
 ## Data cleaning
 
 Remove pots with 2 or more dead or missing trees.
@@ -277,19 +328,28 @@ e2 <- remove_dead_pots(e2)
 
 # Remove dead trees
 remove_dead_trees <- function(data) {
-  trees_to_remove <- data[health == "dead" | health == "missing"]
-  cat("Removed", nrow(trees_to_remove), "remaining dead or missing trees\n\n")
-  data[!.(trees_to_remove)]
+  trees_to_remove <- data[health == "dead" | health == "missing", tree]
+  cat("Removed", length(trees_to_remove), "remaining dead or missing trees\n\n")
+  data[!(tree %in% trees_to_remove), ]
 }
 
 e1 <- remove_dead_trees(e1)
 e2 <- remove_dead_trees(e2)
+
+# Remove trees which are missing at any timepoint
+remove_corresponding <- function(data) {
+
+}
+
 
 # Remove E1 8 week duration
 e1 <- e1[duration != 8]
 
 # Remove E2 pot 33
 e2 <- e2[pot != 33]
+
+# Combine E1 and E2 data
+e1_e2 <- rbind(e1, e2, fill = TRUE)
 
 ```
 
@@ -356,15 +416,30 @@ plot_growth(
 
 # Models
 
+e1[, duration := factor(duration)]
+
+design <- y ~ block + duration * timepoint + (1 | tree) + (1 | pot)
+
 # E1 diameter
 
 e1_diameter_model <- lmer(
-  log(diameter) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
-  data = e1[, duration := factor(duration)]
+  # diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
+  # update(design, paste0("log(", diameter, ")") ~ .),
+  log(diameter) ~ block + duration * timepoint + (1 | tree) + (1 | pot),
+  data = e1
 )
 
 # Check model assumptions
 check_model(e1_diameter_model)
+
+# Try a GLMM with gamma
+e1_diameter_glmm <- glmer(
+  update(design, diameter ~ .),
+  data = e1,
+  family = gaussian(link = "log")
+)
+
+plot(simulateResiduals(e1_diameter_glmm))
 
 # Plot residuals vs fitted values
 # plot(
@@ -394,6 +469,22 @@ check_model(e2_diameter_model)
 summary(e2_diameter_model)
 Anova(e2_diameter_model, type = 3)
 emmeans(e2_diameter_model, ~ duration | timepoint)
+
+
+# E1 & E2 model
+
+design <- y ~ experiment + duration + elapsed_years + experiment:duration + duration:elapsed_years + (1 | experiment / tree) + (1 | experiment / block)
+
+
+e1_e2_diameter_model <- lmer(
+  update(design, diameter ~ .),
+  data = e1_e2[timepoint != "T3" & duration != 8]
+)
+
+check_model(e1_e2_diameter_model)
+summary(e1_e2_diameter_model)
+Anova(e1_e2_diameter_model, type = 3)
+emmeans(e1_e2_diameter_model, pairwise ~ duration | experiment) |> plot()
 
 ```
 
@@ -474,6 +565,7 @@ check_model(e2_height_model)
 
 summary(e2_height_model)
 Anova(e2_height_model, type = 3)
+
 
 ```
 
