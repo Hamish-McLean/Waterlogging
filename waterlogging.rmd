@@ -2,11 +2,20 @@
 title: "Waterlogging Analysis"
 author: "Hamish McLean"
 date: "`r format(Sys.Date(), '%Y-%m-%d')`"
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    highlight: tango
+    theme: spacelab
+    code_folding: hide
+    # fig_caption: true
+    # self_contained: false
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+knitr::opts_chunk$set(echo = TRUE, error = TRUE) #, message = FALSE, warning = FALSE)
 ```
 
 ```{r load_packages}
@@ -38,7 +47,10 @@ figures_dir <- here("figures")
 source(here("functions", "load_data.R"))
 
 latte <- list(
-  red = "#d20f39"
+  red = "#d20f39",
+  yellow = "#df8e1d",
+  green = "#40a02b",
+  text = "#4c4f69"
 )
 
 ```
@@ -152,7 +164,27 @@ e3_2024_10_growth <- load_data(
   data_dir, "2024-10 E3 growth measurements.xlsx", "data"
 )
 
-# head(e3_2024_10_growth)
+e3_2025_05_cankers <- load_data(
+  data_dir, "2025-05 E3 canker assessment.xlsx", c(
+    "inoculations", "cankers"
+  )
+)
+
+# e3_2024_10_growth |> head()
+# e3_2025_05_cankers |> head()
+
+# Combine E3 tables
+
+e3 <- Reduce(
+  function(x, y) {
+    # Merge on common columns
+    common_cols <- intersect(colnames(x), colnames(y))
+    merge(x, y, by = common_cols, all = TRUE)
+  },
+  list(e3_2024_10_growth, e3_2025_05_cankers)
+)[, experiment := "E3"]
+
+# e3 |> head()
 
 ```
 
@@ -161,10 +193,29 @@ e3_2024_10_growth <- load_data(
 ```{r load_data_E4}
 
 e4_2024_12_growth <- load_data(
-  data_dir, "2024-12 E4 growth measurements.xlsx", c("diameter")
+  data_dir, "2024-12 E4 growth measurements.xlsx", "diameter"
 )
 
-# head(e4_2024_12_growth)
+e4_2025_05_cankers <- load_data(
+  data_dir, "2025-05 E4 canker assessment.xlsx", c(
+    "inoculations", "cankers"
+  )
+)
+
+# e4_2024_12_growth |> head()
+# e4_2025_05_cankers |> head()
+
+# Combine E4 tables
+e4 <- Reduce(
+  function(x, y) {
+    # Merge on common columns
+    common_cols <- intersect(colnames(x), colnames(y))
+    merge(x, y, by = common_cols, all = TRUE)
+  },
+  list(e4_2024_12_growth, e4_2025_05_cankers)
+)[, experiment := "E4"]
+
+# e4 |> head()
 
 ```
 
@@ -219,38 +270,112 @@ summarise_tree_health <- function(data) {
 
 }
 
-e1_health_summary <- summarise_tree_health(e1)
+#' @title Summarise tree health
+#'
+summarise_tree_health <- function(data, by) {
 
-e2_health_summary <- summarise_tree_health(e2)
+  # Check columns
+  if (!all(by %in% colnames(data))) {
+    stop("Input data does not contain required columns.")
+  }
+
+  data_copy <- copy(data[, ..by])
+
+  # Combine health categories
+  health_mapping <- list(
+    healthy = c("healthy", "top_broken", "broken"),
+    unhealthy = c("nearly_dead", "unhealthy", "top_dead")
+  )
+  data_copy[, health := fcase(
+    health %in% health_mapping$healthy, "healthy",
+    health %in% health_mapping$unhealthy, "unhealthy",
+    rep(TRUE, .N), health # Keep other categories unchanged
+  )]
+  health_levels <- c("healthy", "unhealthy", "dead", "missing")
+
+  # Generate all combinations of by columns and health
+  # comb_list <- lapply(by, function(col) {
+  #   ifelse(col == "health", health_levels, unique(data_copy[[col]]))
+  # })
+  comb_list <- lapply(by, function(col) unique(data_copy[[col]]))
+  names(comb_list) <- by
+  comb_list$health <- c("healthy", "unhealthy", "dead", "missing")
+  health_combinations <- do.call(CJ, comb_list)
+
+  # Summarise health data
+  health_summary <- data_copy[!is.na(health), .N, by = by]
+
+  health_summary <- merge(
+    health_combinations,
+    health_summary,
+    by = by,
+    all.x = TRUE
+  )
+
+  health_summary[is.na(N), N := 0] # Replace NA with 0 for missing combinations
+
+  # Reorder health factor levels
+  health_summary[, health := factor(
+    health, levels = health_levels
+  )]
+
+}
+
+e1_health_summary <- summarise_tree_health(
+  e1, c("experiment", "timepoint", "duration", "health")
+)
+
+e2_health_summary <- summarise_tree_health(
+  e2, c("experiment", "timepoint", "duration", "health")
+)
+
+e3_health_summary <- summarise_tree_health(
+  e3, c("experiment", "timepoint", "treatment", "genotype", "health")
+)
+
+e4_health_summary <- summarise_tree_health(
+  e4, c("experiment", "timepoint", "season", "duration", "health")
+)
 
 
-
-plot_tree_health <- function(health_summary) {
+plot_tree_health <- function(health_summary, facet_cols, facet_rows) {
   ggbarplot(
     health_summary,
-    x = "health",          # Treatments on the x-axis
-    y = "N",                 # Count of trees on the y-axis
-    fill = "timepoint",         # Separate bars by health category
-    color = "timepoint",        # Add color to distinguish health categories
-    position = position_dodge(0.8), # Dodge bars for better separation
-    # palette = ""          # Use a predefined color palette
+    x = "timepoint",
+    y = "N",
+    fill = "health",
+    color = "health",
+    position = position_dodge(0.8),
+    palette = c(
+      healthy = latte$green,
+      unhealthy = latte$yellow,
+      dead = latte$red,
+      missing = latte$text
+    )
   ) +
-    facet_grid(cols = vars(duration), rows = vars(experiment)) +
+    facet_grid(cols = vars(!!sym(facet_cols)), rows = vars(!!sym(facet_rows))) +
     labs(
       title = "Tree Health by Treatment",
       x = "Treatment Duration",
       y = "Number of Trees"
       # fill = "Health Category"
     ) +
-    theme_minimal()
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    # theme_minimal()
 }
 
 # plot_tree_health(e1_health_summary)
 
 # plot_tree_health(e2_health_summary)
 
-plot_tree_health(bind_rows(e1_health_summary, e2_health_summary))
+plot_tree_health(
+  bind_rows(e1_health_summary, e2_health_summary)[timepoint %in% c("T2", "T3")], 
+  "duration", "experiment"
+)
 
+plot_tree_health(e3_health_summary[timepoint == "T2"], "treatment", "genotype")
+
+plot_tree_health(e4_health_summary[timepoint == "T2"], "duration", "season")
 
 ```
 
@@ -335,6 +460,16 @@ remove_dead_trees <- function(data) {
 
 e1 <- remove_dead_trees(e1)
 e2 <- remove_dead_trees(e2)
+
+# Remove dead trees
+remove_dead_trees <- function(data) {
+  trees_to_remove <- data[health == "dead" | health == "missing", pot]
+  cat("Removed", length(trees_to_remove), "remaining dead or missing trees\n\n")
+  data[!(pot %in% trees_to_remove), ]
+}
+
+e3 <- remove_dead_trees(e3)
+e4 <- remove_dead_trees(e4)
 
 # Remove trees which are missing at any timepoint
 remove_corresponding <- function(data) {
@@ -685,5 +820,43 @@ testZeroInflation(sim)
 summary(e2_canker_model)
 Anova(e2_canker_model, type = 3)
 emmeans(e2_canker_model, ~ duration)
+
+
+
+
+# E3 cankers
+e3_canker_summary <- e3[
+  !is.na(rasp_inoculations) | !is.na(leaf_scar_inoculations),
+  .(block, plot, treatment, genotype, rasp_inoculations, rasp_cankers, leaf_scar_inoculations, leaf_scar_cankers)
+][, 
+  .(
+    rasp_cankers = sum(rasp_cankers, na.rm = TRUE),
+    rasp_inoculations = sum(rasp_inoculations, na.rm = TRUE),
+    leaf_scar_cankers = sum(leaf_scar_cankers, na.rm = TRUE),
+    leaf_scar_inoculations = sum(leaf_scar_inoculations, na.rm = TRUE),
+    N = .N
+  ), 
+  by = .(block, plot, treatment, genotype)
+][, `:=`(
+  rasp_proportion = rasp_cankers / rasp_inoculations,
+  leaf_scar_proportion = leaf_scar_cankers / leaf_scar_inoculations
+)]
+
+# Plot E3 cankers
+ggboxplot(e3_canker_summary,
+  x = "treatment", y = "rasp_proportion",
+  color = "genotype", palette = "jco",
+  add = "jitter",
+  title = "Proportion of rasp wound cankers by Treatment and Genotype",
+  xlab = "Treatment", ylab = "Cankers per inoculation point"
+) + theme(legend.position = "bottom")
+
+ggboxplot(e3_canker_summary,
+  x = "treatment", y = "leaf_scar_proportion",
+  color = "genotype", palette = "jco",
+  add = "jitter",
+  title = "Proportion of leaf scar cankers by Treatment and Genotype",
+  xlab = "Treatment", ylab = "Cankers per inoculation point"
+) + theme(legend.position = "bottom")
 
 ```
