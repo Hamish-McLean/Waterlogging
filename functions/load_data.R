@@ -122,6 +122,7 @@ load_data <- function(dir, filename, sheets = NULL) {
     "season",
     "treatment",
     "inoculation",
+    "inoculation_group",
     "timepoint",
     "year",
     "assessment",

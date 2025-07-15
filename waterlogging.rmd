@@ -14,11 +14,13 @@ output:
     df_print: paged
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include = FALSE}
+
 knitr::opts_chunk$set(echo = TRUE, error = TRUE) #, message = FALSE, warning = FALSE)
+
 ```
 
-```{r load_packages}
+```{r load_packages, include = FALSE}
 
 library(car)
 library(data.table)
@@ -29,6 +31,7 @@ library(ggpubr)
 library(glmmTMB)
 library(here)
 library(lme4)
+library(lmerTest)
 library(performance)
 library(readxl)
 
@@ -91,6 +94,14 @@ e1_2024_growth <- load_data(
   data_dir, "2024-11 E1 growth measurements.xlsx",
   c("diameter", "height", "health")
 )
+
+e1_2023_cankers <- e1_2023[
+  , 
+  c(
+    "block", "plot", "pot",  "duration", "timepoint", "inoculation",
+    "inoc_points", "cankers", 
+  )
+]
 
 # Combine E1 tables
 
@@ -183,6 +194,12 @@ e3 <- Reduce(
   },
   list(e3_2024_10_growth, e3_2025_05_cankers)
 )[, experiment := "E3"]
+
+e3[, treatment := factor(treatment, levels = c(
+  "Control", "Autumn", "Winter", "Spring"
+))]
+
+setnames(e3, "split-plot", "splitPlot")
 
 # e3 |> head()
 
@@ -281,14 +298,21 @@ summarise_tree_health <- function(data, by) {
 
   data_copy <- copy(data[, ..by])
 
-  # Combine health categories
+  # # Combine health categories
+  # health_mapping <- list(
+  #   healthy = c("healthy", "top_broken", "broken"),
+  #   unhealthy = c("nearly_dead", "unhealthy", "top_dead")
+  # )
+  # Class all living trees as healthy
   health_mapping <- list(
-    healthy = c("healthy", "top_broken", "broken"),
-    unhealthy = c("nearly_dead", "unhealthy", "top_dead")
+    healthy = c(
+      "healthy", "top_broken", "broken", "nearly_dead", "unhealthy", "top_dead"
+    )
   )
+
   data_copy[, health := fcase(
     health %in% health_mapping$healthy, "healthy",
-    health %in% health_mapping$unhealthy, "unhealthy",
+    # health %in% health_mapping$unhealthy, "unhealthy",
     rep(TRUE, .N), health # Keep other categories unchanged
   )]
   health_levels <- c("healthy", "unhealthy", "dead", "missing")
@@ -336,31 +360,36 @@ e3_health_summary <- summarise_tree_health(
 e4_health_summary <- summarise_tree_health(
   e4, c("experiment", "timepoint", "season", "duration", "health")
 )
+```
 
+### Tree health plots
 
-plot_tree_health <- function(health_summary, facet_cols, facet_rows) {
+```{r tree_health_plots}
+
+plot_tree_health <- function(health_summary, x, facet_rows) {
   ggbarplot(
     health_summary,
-    x = "timepoint",
+    x = x,
     y = "N",
     fill = "health",
     color = "health",
     position = position_dodge(0.8),
+    legend = "bottom",
     palette = c(
       healthy = latte$green,
-      unhealthy = latte$yellow,
+      # unhealthy = latte$yellow,
       dead = latte$red,
       missing = latte$text
     )
   ) +
-    facet_grid(cols = vars(!!sym(facet_cols)), rows = vars(!!sym(facet_rows))) +
+    facet_wrap(vars(!!sym(facet_rows)), ncol = 1) +
     labs(
-      title = "Tree Health by Treatment",
-      x = "Treatment Duration",
+      # title = "Tree Health by Treatment",
+      x = paste("Waterlogging", x),
       y = "Number of Trees"
       # fill = "Health Category"
-    ) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    )
+    # theme(axis.text.x = element_text(angle = 45, hjust = 1))
     # theme_minimal()
 }
 
@@ -369,60 +398,185 @@ plot_tree_health <- function(health_summary, facet_cols, facet_rows) {
 # plot_tree_health(e2_health_summary)
 
 plot_tree_health(
-  bind_rows(e1_health_summary, e2_health_summary)[timepoint %in% c("T2", "T3")], 
+  bind_rows(e1_health_summary, e2_health_summary)[timepoint == "T2"],
   "duration", "experiment"
 )
+ggsave(filename = "tree_health_e1_e2.png", path = figures_dir)
 
 plot_tree_health(e3_health_summary[timepoint == "T2"], "treatment", "genotype")
+ggsave(filename = "tree_health_e3.png", path = figures_dir)
 
 plot_tree_health(e4_health_summary[timepoint == "T2"], "duration", "season")
+ggsave(filename = "tree_health_e4.png", path = figures_dir)
 
 ```
 
-## Tree health
+## Tree health models
 
-```{r tree health}
+Binomial mixed effects model using `glmer`.
 
-# Combine E1 and E2
+### Experiments 1 & 2
+
+Experiments 1 & 2 combined.
+Design includes `experiment` as a fixed effect.
+
+DHARMa results fine. 
+Binned residuals out of bounds and collinearity very high. 
+Is this data suitable for modelling at all?
+
+```{r tree_health_models_E1_E2}
 
 # Class all living trees as healthy
 healthy <-  c(
   "healthy", "top_broken", "broken", "nearly_dead", "unhealthy", "top_dead"
 )
 
-# Summarise health data for E1 and E2 at T2
+# Combine E1 and E2
+
 e1_e2_health <- rbind(e1, e2, fill = TRUE)[
-  timepoint == "T2" & !is.na(health),
-  .(healthy = sum(health %in% healthy), dead = sum(health == "dead")),
-  by = .(experiment, block, duration)
-][, experiment := factor(experiment)]
+  !is.na(health) & timepoint == "T2"
+][, health := fcase(
+  health %in% healthy, "healthy",
+  health == "dead", "dead"
+) |> as.factor()]
 
-design <- y ~ experiment * duration + (1 | experiment / block)
-
-health_model <- glmmTMB(
-  update(design, cbind(healthy, dead) ~ .),
-  data = e1_e2_health,
-  family = betabinomial(link = "logit")
-)
+design <- health ~ experiment * duration + (1 | experiment:block)
 
 health_model <- glmer(
-  update(design, cbind(healthy, dead) ~ .),
+  design,
   data = e1_e2_health,
-  family = binomial(link = "probit")
+  family = binomial(link = "logit"),
+  # control = glmerControl(optimizer = "bobyqa")
 )
 
 # Check model assumptions
 check_model(health_model)
-check_overdispersion(health_model)
 
-sim <- simulateResiduals(health_model)
-plot(sim)
-testDispersion(sim)
+# sim <- simulateResiduals(health_model)
+# plot(sim)
+# testOverdispersion(sim)
+# testZeroInflation(sim)
 
-summary(health_model)
-Anova(health_model, type = 3)
+# summary(health_model)
+Anova(health_model, type = 3) |> print()
 # ranova(health_model, type = 3)
-emmeans(health_model, ~ duration | experiment) |> plot()
+# emmeans(health_model, ~ duration | experiment) |> plot()
+
+```
+
+
+### Experiment 3
+
+This model would not converv the full 
+
+DHARMa results fine.
+Some binned residuals out of bounds.
+
+```{r tree_health_models_E3}
+
+e3_health <- copy(e3)
+# setnames(e3_health, "split-plot", "splitPlot")
+e3_health <- e3_health[!is.na(health)][
+  ,
+  health := fcase(
+    health %in% healthy, "healthy",
+    health == "dead", "dead"
+  ) |> as.factor()
+]
+
+design <- health ~ treatment + genotype + (1 | block / splitPlot)
+
+health_model_e3 <- glmer(
+  design,
+  data = e3_health,
+  family = binomial(link = "logit")
+)
+
+# Look for cells with 0 counts for either 'healthy' or 'dead'
+# xtabs(~ health + treatment + genotype, data = e3_health)
+
+
+# Check model assumptions
+check_model(health_model_e3)
+
+# sim <- simulateResiduals(health_model_e3)
+# plot(sim)
+# testOverdispersion(sim)
+
+# summary(health_model_e3)
+# exp(fixef(health_model_e3)) # Odds ratios
+Anova(health_model_e3, type = 3) |> print()
+# ranova(health_model_e3, type = 3)
+# emmeans(health_model_e3, ~ duration | experiment) |> plot()
+
+```
+
+### Experiment 4
+
+```{r tree_health_models_E4, eval = FALSE}
+
+e4_health <- e4[!is.na(health)][
+  ,
+  health := fcase(
+    health %in% healthy, "healthy",
+    health == "dead", "dead"
+  ) |> as.factor()
+]
+
+health_model_e4 <- glmer(
+  health ~ duration * season + (1 | block),
+  data = e4_health,
+  family = binomial(link = "logit")
+)
+
+# Check model assumptions
+check_model(health_model_e4)
+
+sim <- simulateResiduals(health_model_e4)
+plot(sim)
+testOverdispersion(sim)
+
+summary(health_model_e4)
+exp(fixef(health_model_e4)) # Odds ratios
+Anova(health_model_e4, type = 3) |> print()
+# ranova(health_model_e4, type = 3)
+# emmeans(health_model_e4, ~ duration | experiment) |> plot()
+
+
+
+# # Summarise health data for E1 and E2 at T2
+# e1_e2_health <- rbind(e1, e2, fill = TRUE)[
+#   timepoint == "T2" & !is.na(health),
+#   .(healthy = sum(health %in% healthy), dead = sum(health == "dead")),
+#   by = .(experiment, block, duration)
+# ][, experiment := factor(experiment)]
+
+# design <- y ~ experiment * duration + (1 | experiment / block)
+
+# health_model <- glmmTMB(
+#   update(design, cbind(healthy, dead) ~ .),
+#   data = e1_e2_health,
+#   family = betabinomial(link = "logit")
+# )
+
+# health_model <- glmer(
+#   update(design, cbind(healthy, dead) ~ .),
+#   data = e1_e2_health,
+#   family = binomial(link = "probit")
+# )
+
+# # Check model assumptions
+# check_model(health_model)
+# check_overdispersion(health_model)
+
+# sim <- simulateResiduals(health_model)
+# plot(sim)
+# testDispersion(sim)
+
+# summary(health_model)
+# Anova(health_model, type = 3) |> print()
+# # ranova(health_model, type = 3)
+# emmeans(health_model, ~ duration | experiment) |> plot()
 
 ```
 
@@ -490,7 +644,7 @@ e1_e2 <- rbind(e1, e2, fill = TRUE)
 
 ## Growth
 
-```{r growth functions}
+```{r growth functions, eval = FALSE}
 
 #' @title Summarise growth data
 #'
@@ -535,7 +689,7 @@ plot_growth <- function(data, measurement) {
 
 ### Diameter
 
-```{r diameter}
+```{r diameter, eval = FALSE}
 
 # E1 diameter
 plot_growth(
@@ -589,7 +743,7 @@ plot(simulateResiduals(e1_diameter_glmm))
 # qqline(residuals(e1_diameter_model), col = latte$red)
 
 summary(e1_diameter_model)
-Anova(e1_diameter_model, type = 3)
+Anova(e1_diameter_model, type = 3) |> print()
 emmeans(e1_diameter_model, ~ duration | timepoint)
 # emmeans(e1_diameter_model, pairwise ~ duration | timepoint)
 
@@ -602,7 +756,7 @@ e2_diameter_model <- lmer(
 check_model(e2_diameter_model)
 
 summary(e2_diameter_model)
-Anova(e2_diameter_model, type = 3)
+Anova(e2_diameter_model, type = 3) |> print()
 emmeans(e2_diameter_model, ~ duration | timepoint)
 
 
@@ -618,14 +772,14 @@ e1_e2_diameter_model <- lmer(
 
 check_model(e1_e2_diameter_model)
 summary(e1_e2_diameter_model)
-Anova(e1_e2_diameter_model, type = 3)
+Anova(e1_e2_diameter_model, type = 3) |> print()
 emmeans(e1_e2_diameter_model, pairwise ~ duration | experiment) |> plot()
 
 ```
 
 ### Height
 
-```{r height}
+```{r height, eval = FALSE}
 
 top_removals <- c("top_broken", "top_missing")
 
@@ -645,7 +799,7 @@ e1_height_model <- lmer(
 check_model(e1_height_model)
 
 summary(e1_height_model)
-Anova(e1_height_model, type = 3)
+Anova(e1_height_model, type = 3) |> print()
 emmeans(e1_height_model, ~ duration | timepoint)
 
 # E2 height
@@ -699,14 +853,14 @@ e2_height_model <- lmer(
 check_model(e2_height_model)
 
 summary(e2_height_model)
-Anova(e2_height_model, type = 3)
+Anova(e2_height_model, type = 3) |> print()
 
 
 ```
 
 ### Extension
 
-```{r extension}
+```{r extension, eval = FALSE}
 
 # Summarise feather
 e2_feather_summary <- e2[
@@ -741,47 +895,55 @@ e2_extension_model <- lmer(
 check_model(e2_extension_model)
 
 summary(e2_extension_model)
-Anova(e2_extension_model, type = 3)
+Anova(e2_extension_model, type = 3) |> print()
 emmeans(e2_extension_model, ~ duration)
 
 ```
 
-## Canker
+## Canker plots
 
-```{r canker}
+### Experiment 1
 
-# Summarise data by plot, taking the sum of canker measurements
+```{r E1 canker plots}
+
 e1_canker_summary <- e1[
   !is.na(cankers), .(block, plot, duration, cankers, inoc_points)
-][, .(
-  cankers = sum(cankers, na.rm = TRUE),
-  inoc_points = sum(inoc_points, na.rm = TRUE),
-  N = .N
-), by = .(block, plot, duration)][, proportion := cankers / inoc_points]
+][
+  , .(
+    cankers = sum(cankers, na.rm = TRUE),
+    inoc_points = sum(inoc_points, na.rm = TRUE),
+    N = .N
+  ), by = .(block, plot, duration)
+][, proportion := cankers / inoc_points]
 
-# Quick boxplot of total_cankers by treatment
+# ggboxplot(e1_canker_summary, x = "duration", y = "proportion",
+#   color = "duration", palette = "jco",
+#   add = "jitter",
+#   title = "Total Cankers by Treatment",
+#   xlab = "Treatment", ylab = "Total Cankers"
+# ) + theme(legend.position = "none")
 
-ggboxplot(e1_canker_summary, x = "duration", y = "proportion",
-  color = "duration", palette = "jco",
+ggerrorplot(
+  data = e1_canker_summary,
+  x = "duration",
+  y = "proportion",
   add = "jitter",
-  title = "Total Cankers by Treatment",
-  xlab = "Treatment", ylab = "Total Cankers"
-) + theme(legend.position = "none")
-
-e1_canker_model <- glmmTMB(
-  cbind(inoc_cankers, inoc_points - inoc_cankers) ~ duration + (1 | block) + (1 | tree),
-  family = betabinomial(link = "logit"),
-  data = e1[!is.na(inoc_cankers)][, duration := factor(duration)]
+  desc_stat = "mean_ci",
+  size = 1,
+  position = position_dodge(0.5),
+  add.params = list(alpha = 0.5)
+) + labs(
+  title = "Experiment 1: winter waterlogging timing",
+  x = "Waterlogging duration (weeks)",
+  y = "Cankers per inoculation point"
 )
+ggsave(filename = "canker_plots_E1.png", path = figures_dir)
 
-# Check model assumptions
-plot(simulateResiduals(e1_canker_model))
+```
 
-summary(e1_canker_model)
-Anova(e1_canker_model, type = 3)
-emmeans(e1_canker_model, ~ duration)
+### Experiment 2
 
-# E2 cankers
+```{r E2 canker plots}
 
 e2_canker_summary <- e2[
   !is.na(rasp_inoculations), .(
@@ -796,67 +958,236 @@ e2_canker_summary <- e2[
   proportion := rasp_cankers / rasp_inoculations
 ]
 
-# Plot E2 cankers
-ggboxplot(e2_canker_summary,
-  x = "duration", y = "proportion",
-  color = "duration", palette = "jco",
+# ggboxplot(e2_canker_summary,
+#   x = "duration", y = "proportion",
+#   color = "duration", palette = "jco",
+#   add = "jitter",
+#   title = "Proportion of cankers by Treatment",
+#   xlab = "Waterlogging duration (weeks)", ylab = "Cankers per inoculation point"
+# ) + theme(legend.position = "none")
+
+ggerrorplot(
+  data = e2_canker_summary,
+  x = "duration",
+  y = "proportion",
   add = "jitter",
-  title = "Proportion of cankers by Treatment",
-  xlab = "Waterlogging duration (weeks)", ylab = "Cankers per inoculation point"
-) + theme(legend.position = "none")
+  desc_stat = "mean_ci",
+  size = 1,
+  position = position_dodge(0.5),
+  add.params = list(alpha = 0.5)
+) + labs(
+  title = "Experiment 2: winter waterlogging duration",
+  x = "Waterlogging duration (weeks)",
+  y = "Cankers per inoculation point"
+)
+ggsave(filename = "canker_plots_E2.png", path = figures_dir)
 
+```
 
-e2_canker_model <- glmmTMB(
-  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block) + (1 | tree) + (1 | pot),
-  family = betabinomial(link = "logit"),
+### Experiment 3
+
+```{r E3 canker plots}
+
+e3_canker_summary <- melt(
+  e3[!is.na(rasp_inoculations) | !is.na(leaf_scar_inoculations), ],
+  id.vars = c("block", "plot", "treatment", "genotype"),
+  variable.name = "type",
+  measure = list(
+    cankers = c("rasp_cankers", "leaf_scar_cankers"),
+    inoculations = c("rasp_inoculations", "leaf_scar_inoculations")
+  ),
+)[
+  , .(
+    cankers = sum(cankers, na.rm = TRUE),
+    inoculations = sum(inoculations, na.rm = TRUE),
+    N = .N
+  ), by = .(plot, genotype, treatment, type)
+][
+  , `:=`(
+    proportion = cankers / inoculations,
+    type = factor(type, labels = c("rasp wound", "leaf scar"))
+  )
+]
+
+ggerrorplot(
+  data = e3_canker_summary,
+  x = "treatment",
+  y = "proportion",
+  add = "jitter",
+  desc_stat = "mean_ci", # mean and CI
+  size = 0.6,
+  position = position_dodge(0.5),
+  ggtheme = theme_bw(),
+  add.params = list(alpha = 0.3) # Set alpha for jitter points
+) + facet_grid(
+  type ~ genotype
+) + labs(
+  title = "Experiment 3: waterlogging timing and rootstock genotype",
+  x = "Treatment",
+  y = "Cankers per inoculation point"
+)
+ggsave(filename = "canker_plots_E3.png", path = figures_dir)
+
+```
+
+### Experiment 4
+
+```{r E4 canker plots}
+
+# e4_canker_summary <- e4
+
+```
+
+## Canker models
+
+### Experiment 1
+
+```{r E1 canker models, eval = FALSE}
+
+e1_canker_data <- e1[!is.na(inoc_cankers)] |> as.data.frame()
+
+# E1 canker model
+e1_canker_model <- glmer(
+  cbind(inoc_cankers, inoc_points - inoc_cankers) ~ duration + (1 | block), # + (1 | plot),
+  family = binomial(link = "logit"),
+  data = e1_canker_data
+)
+
+# Check model assumptions
+check_model(e1_canker_model)
+plot(simulateResiduals(e1_canker_model))
+
+summary(e1_canker_model)
+Anova(e1_canker_model, type = 3) |> print()
+emmeans(e1_canker_model, specs = trt.vs.ctrl ~ duration, type = "response")
+
+```
+
+### Experiment 2
+
+```{r E2 canker models}
+
+# E2 canker model
+e2_canker_model <- glmer(
+  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block),
+  family = binomial(link = "logit"),
   data = e2[!is.na(rasp_cankers)][, duration := factor(duration)]
 )
 
 # Check model assumptions
+check_model(e2_canker_model)
 sim <- simulateResiduals(e2_canker_model)
 plot(sim)
 testZeroInflation(sim)
 
+# Summary
 summary(e2_canker_model)
-Anova(e2_canker_model, type = 3)
-emmeans(e2_canker_model, ~ duration)
+exp(fixef(e2_canker_model)) # Odds ratios
+Anova(e2_canker_model, type = 3) |> print()
+
+emmeans(e2_canker_model, specs = trt.vs.ctrl ~ duration, type = "response") |> plot()
+
+```
+
+### Experiment 3
+
+```{r E3 canker models}
+
+# design <- y ~ treatment * genotype + (1 | block) + (1 | pot)
+
+# E3 rasp wound canker model
+e3_rasp_canker_model <- glmer(
+  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ treatment * genotype + (1 | block / splitPlot),
+  family = binomial(link = "logit"),
+  data = e3[!is.na(rasp_cankers)]
+)
+
+# Check model assumptions
+check_model(e3_rasp_canker_model)
+sim <- simulateResiduals(e3_rasp_canker_model)
+plot(sim)
+testZeroInflation(sim)
+
+# Summary
+summary(e3_rasp_canker_model)
+exp(fixef(e3_rasp_canker_model)) # Odds ratios
+Anova(e3_rasp_canker_model, type = 3) |> print()
+emmeans(e3_rasp_canker_model, specs = trt.vs.ctrl ~ treatment, by = "genotype", type = "response") |> plot()
 
 
+# E3 leaf scar canker model
+e3_leaf_scar_canker_model <- glmer(
+  cbind(leaf_scar_cankers, leaf_scar_inoculations - leaf_scar_cankers) ~ treatment * genotype + (1 | block / splitPlot),
+  family = binomial(link = "logit"),
+  data = e3[!is.na(leaf_scar_cankers)]
+)
 
+# Check model assumptions
+check_model(e3_leaf_scar_canker_model)
+sim <- simulateResiduals(e3_leaf_scar_canker_model)
+plot(sim)
+testZeroInflation(sim)
 
-# E3 cankers
-e3_canker_summary <- e3[
-  !is.na(rasp_inoculations) | !is.na(leaf_scar_inoculations),
-  .(block, plot, treatment, genotype, rasp_inoculations, rasp_cankers, leaf_scar_inoculations, leaf_scar_cankers)
-][, 
-  .(
-    rasp_cankers = sum(rasp_cankers, na.rm = TRUE),
-    rasp_inoculations = sum(rasp_inoculations, na.rm = TRUE),
-    leaf_scar_cankers = sum(leaf_scar_cankers, na.rm = TRUE),
-    leaf_scar_inoculations = sum(leaf_scar_inoculations, na.rm = TRUE),
-    N = .N
-  ), 
-  by = .(block, plot, treatment, genotype)
-][, `:=`(
-  rasp_proportion = rasp_cankers / rasp_inoculations,
-  leaf_scar_proportion = leaf_scar_cankers / leaf_scar_inoculations
-)]
+# Summary
+summary(e3_leaf_scar_canker_model)
+exp(fixef(e3_leaf_scar_canker_model)) # Odds ratios
+Anova(e3_leaf_scar_canker_model, type = 3) |> print()
 
-# Plot E3 cankers
-ggboxplot(e3_canker_summary,
-  x = "treatment", y = "rasp_proportion",
-  color = "genotype", palette = "jco",
-  add = "jitter",
-  title = "Proportion of rasp wound cankers by Treatment and Genotype",
-  xlab = "Treatment", ylab = "Cankers per inoculation point"
-) + theme(legend.position = "bottom")
+# emmeans
+emm1 <- emmeans(e3_leaf_scar_canker_model, specs = trt.vs.ctrl ~ treatment, by = "genotype", type = "response")
+emm1 |> plot()
+# emm1$emmeans emm1$contrasts
 
-ggboxplot(e3_canker_summary,
-  x = "treatment", y = "leaf_scar_proportion",
-  color = "genotype", palette = "jco",
-  add = "jitter",
-  title = "Proportion of leaf scar cankers by Treatment and Genotype",
-  xlab = "Treatment", ylab = "Cankers per inoculation point"
-) + theme(legend.position = "bottom")
+emm2 <- emmeans(e3_leaf_scar_canker_model, specs = ~ treatment, by = "genotype", type = "response")
+contrast(emm2, method = "trt.vs.ctrl") |> confint()
+
+```
+
+### Experiment 4
+
+```{r E4 canker models, eval = FALSE}
+
+# For E4 the control trees have 0 weeks of waterlogging in winter and spring
+# but are the same trees for both
+
+# E4 rasp wound canker model
+e4_canker_model <- glmer(
+  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration * season + (1 | block), # + (1 | pot),
+  family = binomial(link = "logit"),
+  data = e4[!is.na(rasp_cankers)]
+)
+
+# Check model assumptions
+check_model(e4_canker_model)
+sim <- simulateResiduals(e4_canker_model)
+plot(sim)
+testOverdispersion(sim)
+testZeroInflation(sim)
+
+# Summary
+summary(e4_canker_model)
+exp(fixef(e4_canker_model)) # Odds ratios
+Anova(e4_canker_model, type = 3) |> print()
+emmeans(e4_canker_model, ~ duration | season) |> plot()
+
+# E4 leaf scar canker model
+e4_leaf_scar_canker_model <- glmer(
+  cbind(leaf_scar_cankers, leaf_scar_inoculations - leaf_scar_cankers) ~ duration * season + (1 | block), # + (1 | pot),
+  family = binomial(link = "logit"),
+  data = e4[!is.na(leaf_scar_cankers)]
+)
+
+# Check model assumptions
+check_model(e4_leaf_scar_canker_model)
+sim <- simulateResiduals(e4_leaf_scar_canker_model)
+plot(sim)
+testOverdispersion(sim)
+testZeroInflation(sim)
+
+# Summary
+summary(e4_leaf_scar_canker_model)
+exp(fixef(e4_leaf_scar_canker_model)) # Odds ratios
+Anova(e4_leaf_scar_canker_model, type = 3) |> print()
+emmeans(e4_leaf_scar_canker_model, ~ duration | season) |> plot()
 
 ```
