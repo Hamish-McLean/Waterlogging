@@ -80,6 +80,14 @@ load_data <- function(dir, filename, sheets = NULL) {
   #   dt
   # })
 
+  # Drop date (replaced by tiempoint)
+  data_list <- lapply(data_list, function(dt) {
+    if ("date" %in% colnames(dt)) {
+      dt[, date := NULL] # Remove the original date column
+    }
+    dt
+  })
+
   # Combine the tables into a single data.table
   combined_data <- Reduce(
     function(x, y) {

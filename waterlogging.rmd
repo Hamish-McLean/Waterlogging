@@ -20,7 +20,7 @@ knitr::opts_chunk$set(echo = TRUE, error = TRUE) #, message = FALSE, warning = F
 
 ```
 
-```{r load_packages, include = FALSE}
+```{r load_packages}
 
 library(car)
 library(data.table)
@@ -45,6 +45,15 @@ library(readxl)
 # Set data and figures directories
 data_dir    <- here("..", "Data")
 figures_dir <- here("figures")
+
+# Model designs
+E1_DESIGN <- ~ treatment * timepoint + (1 | block) + (1 | tree) + (1 | pot)
+E2_DESIGN <- ~ treatment * timepoint + (1 | block) + (1 | tree) + (1 | pot)
+E3_DESIGN <- ~ treatment * (timepoint + genotype) + (1 | block / splitPlot) + (1 | tree)
+# E4_DESIGN
+
+E1_E2_DESIGN <- ~ treatment * tmiepoint * experiment + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
+
 
 # Load custom functions
 source(here("functions", "load_data.R"))
@@ -95,13 +104,10 @@ e1_2024_growth <- load_data(
   c("diameter", "height", "health")
 )
 
-e1_2023_cankers <- e1_2023[
-  , 
-  c(
-    "block", "plot", "pot",  "duration", "timepoint", "inoculation",
-    "inoc_points", "cankers", 
-  )
-]
+e1_2023_cankers <- e1_2023[, c(
+  "block", "plot", "pot",  "duration", "timepoint", "inoculation",
+  "inoc_points", "cankers"
+)]
 
 # Combine E1 tables
 
@@ -140,16 +146,22 @@ e2_2024_12_growth <- load_data(
   c("diameter", "height", "feather", "health")
 )
 
+
 # Combine E2 tables
+
+merge_cols <- c("diameter")
 
 e2 <- Reduce(
   function(x, y) {
     # Merge on common columns
     common_cols <- intersect(colnames(x), colnames(y))
+    common_cols <- common_cols[!common_cols %in% merge_cols]
     merge(x, y, by = common_cols, all = TRUE)
   },
   list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth)
 )
+
+e2[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
 
 e2[, timepoint := as.factor(timepoint)]
 
@@ -644,7 +656,7 @@ e1_e2 <- rbind(e1, e2, fill = TRUE)
 
 ## Growth
 
-```{r growth functions, eval = FALSE}
+```{r growth functions}
 
 #' @title Summarise growth data
 #'
@@ -672,6 +684,13 @@ summarise_growth <- function(data, measurement, remove_health = NULL) {
 #' @title Plot growth data
 #'
 plot_growth <- function(data, measurement) {
+  units = if (measurement == "diameter") {
+    "mm"
+  } else if (measurement == "height") {
+    "cm"
+  } else {
+    NULL
+  }
   ggline(
     data,
     x = "timepoint",
@@ -679,25 +698,44 @@ plot_growth <- function(data, measurement) {
     color = "duration"
   ) +
     labs(
-      title = paste(measurement, "by Treatment"),
+      title = measurement, #paste(measurement, "by Treatment"),
       x = "Timepoint",
-      y = measurement
+      y = paste0(measurement, " (", units, ")")
     )
 }
 
 ```
 
+### Growth plots
+
+```{r growth_plots}
+
+# E1 combined
+
+ggarrange(
+  plot_growth(summarise_growth(e1, "diameter"), "diameter"),
+  plot_growth(summarise_growth(e1, "height"), "height"),
+  # with = 20, height = 15, units = "cm",
+  # nrow = 1, ncol = 2,
+  common.legend = TRUE, legend = "bottom"
+)
+ggsave(filename = "E1_growth_plots.png", path = figures_dir)
+
+```
+
 ### Diameter
 
-```{r diameter, eval = FALSE}
+#### Experiment 1 & 2
 
-# E1 diameter
+```{r diameter E1}
+
+# E1 diameter plot
 plot_growth(
   summarise_growth(e1, "diameter"),
   "diameter"
 )
 
-# E2 diameter
+# E2 diameter plot
 plot_growth(
   summarise_growth(e2, "diameter"),
   "diameter"
@@ -705,81 +743,50 @@ plot_growth(
 
 # Models
 
-e1[, duration := factor(duration)]
+design <- y ~ duration * timepoint + (1 | block) + (1 | tree) + (1 | pot)
 
-design <- y ~ block + duration * timepoint + (1 | tree) + (1 | pot)
+# E1 diameter model
 
-# E1 diameter
+e1_diameter_model <- lmer(update(E1_DESIGN, diameter ~ .), data = e1)
 
-e1_diameter_model <- lmer(
-  # diameter ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
-  # update(design, paste0("log(", diameter, ")") ~ .),
-  log(diameter) ~ block + duration * timepoint + (1 | tree) + (1 | pot),
-  data = e1
-)
-
-# Check model assumptions
 check_model(e1_diameter_model)
 
-# Try a GLMM with gamma
-e1_diameter_glmm <- glmer(
-  update(design, diameter ~ .),
-  data = e1,
-  family = gaussian(link = "log")
-)
-
-plot(simulateResiduals(e1_diameter_glmm))
-
-# Plot residuals vs fitted values
-# plot(
-#   fitted(e1_diameter_model), residuals(e1_diameter_model),
-#     xlab = "Fitted Values", ylab = "Conditional Residuals",
-#     main = "Residuals vs. Fitted"
-# )
-# abline(h = 0, col = latte$red, lty = 2)
-
-# # Q-Q plot
-# qqnorm(residuals(e1_diameter_model))
-# qqline(residuals(e1_diameter_model), col = latte$red)
-
-summary(e1_diameter_model)
 Anova(e1_diameter_model, type = 3) |> print()
-emmeans(e1_diameter_model, ~ duration | timepoint)
-# emmeans(e1_diameter_model, pairwise ~ duration | timepoint)
 
+# E2 diameter model
 
-e2_diameter_model <- lmer(
-  log(diameter) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
-  data = e2[, duration := factor(duration)]
-)
+e2_diameter_model <- lmer(update(E2_DESIGN, diameter ~ .), data = e2)
 
 check_model(e2_diameter_model)
 
-summary(e2_diameter_model)
+# summary(e2_diameter_model)
 Anova(e2_diameter_model, type = 3) |> print()
-emmeans(e2_diameter_model, ~ duration | timepoint)
 
 
 # E1 & E2 model
 
-design <- y ~ experiment + duration + elapsed_years + experiment:duration + duration:elapsed_years + (1 | experiment / tree) + (1 | experiment / block)
+# design <- y ~ experiment + duration + elapsed_years + experiment:duration + duration:elapsed_years + (1 | experiment / tree) + (1 | experiment / block)
+
+design <- y ~ treatment * experiment * timepoint + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
 
 
 e1_e2_diameter_model <- lmer(
-  update(design, diameter ~ .),
+  update(E1_E2_DESIGN, diameter ~ .),
   data = e1_e2[timepoint != "T3" & duration != 8]
 )
 
 check_model(e1_e2_diameter_model)
-summary(e1_e2_diameter_model)
+# summary(e1_e2_diameter_model)
 Anova(e1_e2_diameter_model, type = 3) |> print()
-emmeans(e1_e2_diameter_model, pairwise ~ duration | experiment) |> plot()
+emm_height_e1_e2 <- emmeans(e1_e2_diameter_model, trt.vs.ctrl ~ duration | experiment | timepoint)
+print(emm_height_e1_e2)
+plot(emm_height_e1_e2)
 
 ```
 
 ### Height
 
-```{r height, eval = FALSE}
+```{r height}
 
 top_removals <- c("top_broken", "top_missing")
 
@@ -791,16 +798,17 @@ plot_growth(
 
 # E1 height model
 e1_height_model <- lmer(
-  log(height) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
-  data = e1[!(health %in% top_removals), duration := factor(duration)]
+  # log(height) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
+  update(E1_DESIGN, height ~ .),
+  data = e1[!(health %in% top_removals)]
 )
 
 # Check model assumptions
 check_model(e1_height_model)
 
-summary(e1_height_model)
+# summary(e1_height_model)
 Anova(e1_height_model, type = 3) |> print()
-emmeans(e1_height_model, ~ duration | timepoint)
+# emmeans(e1_height_model, ~ duration | timepoint)
 
 # E2 height
 plot_growth(
@@ -808,57 +816,60 @@ plot_growth(
   "height"
 )
 
-ggline(
-  summarise_growth(e2, "height", top_removals),
-  x = "timepoint",
-  y = "median",
-  color = "duration"
-) +
-  labs(
-    title = "Height by Treatment",
-    x = "Timepoint",
-    y = "Height (cm)"
-  )
+# ggline(
+#   summarise_growth(e2, "height", top_removals),
+#   x = "timepoint",
+#   y = "median",
+#   color = "duration"
+# ) +
+#   labs(
+#     title = "Height by Treatment",
+#     x = "Timepoint",
+#     y = "Height (cm)"
+#   )
 
-e2_height_summary <- e2[
-  !is.na(height) & !(health %in% top_removals),
-  .(block, plot, duration, height)
-][, .(
-  mean = mean(height, na.rm = TRUE),
-  median = median(height, na.rm = TRUE),
-  N = .N,
-  sd = sd(height, na.rm = TRUE)
-), by = .(block, plot, duration)][, duration := factor(duration)]
+# e2_height_summary <- e2[
+#   !is.na(height) & !(health %in% top_removals),
+#   .(block, plot, duration, height)
+# ][, .(
+#   mean = mean(height, na.rm = TRUE),
+#   median = median(height, na.rm = TRUE),
+#   N = .N,
+#   sd = sd(height, na.rm = TRUE)
+# ), by = .(block, plot, duration)][, duration := factor(duration)]
 
-ggboxplot(
-  e2_height_summary,
-  x = "duration",
-  y = "median",
-  color = "duration",
-  add = "jitter"
-) +
-  labs(
-    title = "Extension by Treatment",
-    x = "Waterlogging duration (weeks)",
-    y = "Height (cm)"
-  )
+# ggboxplot(
+#   e2_height_summary,
+#   x = "duration",
+#   y = "median",
+#   color = "duration",
+#   add = "jitter"
+# ) +
+#   labs(
+#     title = "Extension by Treatment",
+#     x = "Waterlogging duration (weeks)",
+#     y = "Height (cm)"
+#   )
 
 # E2 height model
 e2_height_model <- lmer(
-  log(height) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
+  update(E2_DESIGN, height ~ .),
   data = e2[!(health %in% top_removals), duration := factor(duration)]
 )
 
 # Check model assumptions
 check_model(e2_height_model)
 
-summary(e2_height_model)
+# summary(e2_height_model)
 Anova(e2_height_model, type = 3) |> print()
 
+emm_height <- emmeans(e2_height_model, trt.vs.ctrl ~ duration | timepoint)
+
+print(emm_height)
+
+plot(emm_height) #, comparisons = TRUE)
 
 ```
-
-### Extension
 
 ```{r extension, eval = FALSE}
 
