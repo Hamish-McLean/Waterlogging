@@ -148,10 +148,20 @@ e2_2024_12_growth <- load_data(
   c("diameter", "height", "feather", "health")
 )
 
+e2_2025_08_growth <- load_data(
+  data_dir, "2025-08 E2 growth measurements.xlsx",
+  c("diameter", "height", "health")
+)
+
+e2_2025_09_canker <- load_data(
+  data_dir, "2025-09 E2 canker assessment.xlsx", 
+  c("rasp_cankers", "leaf_scar_cankers")
+)
+
 
 # Combine E2 tables
 
-merge_cols <- c("diameter")
+merge_cols <- c("diameter", "heaght", "health")
 
 e2 <- Reduce(
   function(x, y) {
@@ -160,12 +170,11 @@ e2 <- Reduce(
     common_cols <- common_cols[!common_cols %in% merge_cols]
     merge(x, y, by = common_cols, all = TRUE)
   },
-  list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth)
+  list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth, e2_2025_08_growth, e2_2025_09_canker)
 )
 
-e2[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
-
-e2[, timepoint := as.factor(timepoint)]
+e2[, diameter := coalesce(diameter, diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e2[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
 
 # Add experiment id column
 e2[, experiment := "E2"]
@@ -195,6 +204,12 @@ e3_2025_05_cankers <- load_data(
   )
 )
 
+e3_2025_09_cankers <- load_data(
+  data_dir, "2025-09 E3 canker assessment.xlsx", c(
+    "inoculations", "cankers"
+  )
+)
+
 # e3_2024_10_growth |> head()
 # e3_2025_05_cankers |> head()
 
@@ -206,7 +221,7 @@ e3 <- Reduce(
     common_cols <- intersect(colnames(x), colnames(y))
     merge(x, y, by = common_cols, all = TRUE)
   },
-  list(e3_2024_10_growth, e3_2025_05_cankers)
+  list(e3_2024_10_growth, e3_2025_05_cankers, e3_2025_09_cankers)
 )[, experiment := "E3"]
 
 e3[, treatment := factor(treatment, levels = c(
@@ -376,6 +391,7 @@ e3_health_summary <- summarise_tree_health(
 e4_health_summary <- summarise_tree_health(
   e4, c("experiment", "timepoint", "treatment", "health")
 )
+
 ```
 
 ### Tree health plots
@@ -394,8 +410,8 @@ plot_tree_health <- function(health_summary, x, facet_rows = NULL) {
     palette = c(
       healthy = latte$green,
       # unhealthy = latte$yellow,
-      dead = latte$red,
-      missing = latte$text
+      dead = latte$red
+      # missing = latte$text
     )
   )
 
@@ -421,8 +437,14 @@ plot_tree_health(
 )
 ggsave(filename = "tree_health_e1_e2.png", path = figures_dir)
 
-plot_tree_health(e3_health_summary[timepoint == "T1"], "treatment", "genotype")
-ggsave(filename = "tree_health_e3.png", path = figures_dir)
+plot_tree_health(
+  e3_health_summary[timepoint == "T1" & (health == "healthy" | health == "dead")], 
+  "treatment", "genotype"
+)
+ggsave(
+  filename = "tree_health_e3.png", path = figures_dir,
+  width = 10, height = 10, units = "cm"  
+)
 
 plot_tree_health(e4_health_summary[timepoint == "T2"], "treatment")
 ggsave(filename = "tree_health_e4.png", path = figures_dir)
@@ -735,6 +757,18 @@ ggarrange(
 )
 ggsave(filename = "E1_growth_plots.png", path = figures_dir)
 
+
+# E2 combined
+
+ggarrange(
+  plot_growth(summarise_growth(e2, "diameter"), "diameter"),
+  plot_growth(summarise_growth(e2, "height"), "height"),
+  # with = 20, height = 15, units = "cm",
+  # nrow = 1, ncol = 2,
+  common.legend = TRUE, legend = "bottom"
+)
+ggsave(filename = "E2_growth_plots.png", path = figures_dir)
+
 ```
 
 ### Diameter
@@ -743,58 +777,58 @@ ggsave(filename = "E1_growth_plots.png", path = figures_dir)
 
 ```{r diameter E1}
 
-# E1 diameter plot
-plot_growth(
-  summarise_growth(e1, "diameter"),
-  "diameter"
-)
+# # E1 diameter plot
+# plot_growth(
+#   summarise_growth(e1, "diameter"),
+#   "diameter"
+# )
 
-# E2 diameter plot
-plot_growth(
-  summarise_growth(e2, "diameter"),
-  "diameter"
-)
+# # E2 diameter plot
+# plot_growth(
+#   summarise_growth(e2, "diameter"),
+#   "diameter"
+# )
 
 # Models
 
-design <- y ~ duration * timepoint + (1 | block) + (1 | tree) + (1 | pot)
+# design <- y ~ duration * timepoint + (1 | block) + (1 | tree) + (1 | pot)
 
 # E1 diameter model
 
 e1_diameter_model <- lmer(update(E1_DESIGN, diameter ~ .), data = e1)
-
 check_model(e1_diameter_model)
-
 Anova(e1_diameter_model, type = 3) |> print()
+
 
 # E2 diameter model
 
 e2_diameter_model <- lmer(update(E2_DESIGN, diameter ~ .), data = e2)
-
 check_model(e2_diameter_model)
-
 # summary(e2_diameter_model)
 Anova(e2_diameter_model, type = 3) |> print()
+emm_diameter_e2 <- emmeans(e2_diameter_model, trt.vs.ctrl ~ duration | timepoint)
+print(emm_diameter_e2)
+plot(emm_diameter_e2)
 
 
 # E1 & E2 model
 
 # design <- y ~ experiment + duration + elapsed_years + experiment:duration + duration:elapsed_years + (1 | experiment / tree) + (1 | experiment / block)
 
-design <- y ~ treatment * experiment * timepoint + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
+# design <- y ~ treatment * experiment * timepoint + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
 
 
 e1_e2_diameter_model <- lmer(
   update(E1_E2_DESIGN, diameter ~ .),
-  data = e1_e2[timepoint != "T3" & duration != 8]
+  data = e1_e2[duration != 8]
 )
 
 check_model(e1_e2_diameter_model)
 # summary(e1_e2_diameter_model)
 Anova(e1_e2_diameter_model, type = 3) |> print()
-emm_height_e1_e2 <- emmeans(e1_e2_diameter_model, trt.vs.ctrl ~ duration | experiment | timepoint)
-print(emm_height_e1_e2)
-plot(emm_height_e1_e2)
+emm_diameter_e1_e2 <- emmeans(e1_e2_diameter_model, trt.vs.ctrl ~ duration | experiment | timepoint)
+print(emm_diameter_e1_e2)
+plot(emm_diameter_e1_e2)
 
 ```
 
@@ -805,10 +839,10 @@ plot(emm_height_e1_e2)
 top_removals <- c("top_broken", "top_missing")
 
 # E1 height
-plot_growth(
-  summarise_growth(e1, "height", top_removals),
-  "height"
-)
+# plot_growth(
+#   summarise_growth(e1, "height", top_removals),
+#   "height"
+# )
 
 # E1 height model
 e1_height_model <- lmer(
@@ -819,69 +853,44 @@ e1_height_model <- lmer(
 
 # Check model assumptions
 check_model(e1_height_model)
-
 # summary(e1_height_model)
 Anova(e1_height_model, type = 3) |> print()
 # emmeans(e1_height_model, ~ duration | timepoint)
 
 # E2 height
-plot_growth(
-  summarise_growth(e2, "height", top_removals),
-  "height"
-)
-
-# ggline(
+# plot_growth(
 #   summarise_growth(e2, "height", top_removals),
-#   x = "timepoint",
-#   y = "median",
-#   color = "duration"
-# ) +
-#   labs(
-#     title = "Height by Treatment",
-#     x = "Timepoint",
-#     y = "Height (cm)"
-#   )
-
-# e2_height_summary <- e2[
-#   !is.na(height) & !(health %in% top_removals),
-#   .(block, plot, duration, height)
-# ][, .(
-#   mean = mean(height, na.rm = TRUE),
-#   median = median(height, na.rm = TRUE),
-#   N = .N,
-#   sd = sd(height, na.rm = TRUE)
-# ), by = .(block, plot, duration)][, duration := factor(duration)]
-
-# ggboxplot(
-#   e2_height_summary,
-#   x = "duration",
-#   y = "median",
-#   color = "duration",
-#   add = "jitter"
-# ) +
-#   labs(
-#     title = "Extension by Treatment",
-#     x = "Waterlogging duration (weeks)",
-#     y = "Height (cm)"
-#   )
+#   "height"
+# )
 
 # E2 height model
 e2_height_model <- lmer(
   update(E2_DESIGN, height ~ .),
-  data = e2[!(health %in% top_removals), duration := factor(duration)]
+  data = e2[!(health %in% top_removals)]
 )
 
 # Check model assumptions
 check_model(e2_height_model)
-
 # summary(e2_height_model)
 Anova(e2_height_model, type = 3) |> print()
-
 emm_height <- emmeans(e2_height_model, trt.vs.ctrl ~ duration | timepoint)
-
 print(emm_height)
-
 plot(emm_height) #, comparisons = TRUE)
+
+
+# E1 & E2 model
+
+e1_e2_height_model <- lmer(
+  update(E1_E2_DESIGN, height ~ .),
+  data = e1_e2[!(health %in% top_removals) & duration != 8]
+)
+
+check_model(e1_e2_height_model)
+# summary(e1_e2_height_model)
+Anova(e1_e2_height_model, type = 3) |> print()
+emm_height_e1_e2 <- emmeans(e1_e2_height_model, trt.vs.ctrl ~ duration | experiment | timepoint)
+print(emm_height_e1_e2)
+plot(emm_height_e1_e2)
 
 ```
 
@@ -1014,7 +1023,7 @@ ggsave(filename = "canker_plots_E2.png", path = figures_dir)
 ```{r E3 canker plots}
 
 e3_canker_summary <- melt(
-  e3[!is.na(rasp_inoculations) | !is.na(leaf_scar_inoculations), ],
+  e3[timepoint == "T2" & (!is.na(rasp_inoculations) | !is.na(leaf_scar_inoculations)), ],
   id.vars = c("block", "plot", "treatment", "genotype"),
   variable.name = "type",
   measure = list(
@@ -1051,7 +1060,10 @@ ggerrorplot(
   x = "Treatment",
   y = "Cankers per inoculation point"
 )
-ggsave(filename = "canker_plots_E3.png", path = figures_dir)
+ggsave(
+  filename = "canker_plots_E3_T2.png", path = figures_dir,
+  width = 15, height = 10, units = "cm"
+)
 
 ```
 
@@ -1121,9 +1133,9 @@ emmeans(e2_canker_model, trt.vs.ctrl ~ duration)
 
 # E3 rasp wound canker model
 e3_rasp_canker_model <- glmer(
-  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ treatment * genotype + (1 | block / splitPlot) + (1 | inoculation_group),
+  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ genotype * treatment + (1 | block / splitPlot) + (1 | inoculation_group),
   family = binomial(link = "logit"),
-  data = e3[!is.na(rasp_cankers)]
+  data = e3[timepoint == "T2" & !is.na(rasp_cankers)]
 )
 
 # Check model assumptions
@@ -1145,9 +1157,9 @@ plot(emm_e3_rasp_canker)
 
 # E3 leaf scar canker model
 e3_leaf_scar_canker_model <- glmer(
-  cbind(leaf_scar_cankers, leaf_scar_inoculations - leaf_scar_cankers) ~ treatment * genotype + (1 | block / splitPlot) + (1 | inoculation_group),
+  cbind(leaf_scar_cankers, leaf_scar_inoculations - leaf_scar_cankers) ~ genotype * treatment + (1 | block / splitPlot) + (1 | inoculation_group),
   family = binomial(link = "logit"),
-  data = e3[!is.na(leaf_scar_cankers)]
+  data = e3[timepoint == "T2" & !is.na(leaf_scar_cankers)]
 )
 
 # Check model assumptions
@@ -1165,6 +1177,8 @@ Anova(e3_leaf_scar_canker_model, type = 3) |> print()
 emm_e3_leaf_scar_canker <- emmeans(e3_leaf_scar_canker_model, trt.vs.ctrl ~ treatment | genotype)
 print(emm_e3_rasp_canker)
 plot(emm_e3_rasp_canker)
+
+emmeans(e3_leaf_scar_canker_model, ~ genotype | treatment)
 
 ```
 
