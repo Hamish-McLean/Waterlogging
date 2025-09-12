@@ -49,12 +49,12 @@ data_dir    <- here("..", "Data")
 figures_dir <- here("figures")
 
 # Model designs
-E1_DESIGN <- ~ duration * timepoint + (1 | block) + (1 | tree) + (1 | pot)
-E2_DESIGN <- ~ duration * timepoint + (1 | block) + (1 | tree) + (1 | pot)
-E3_DESIGN <- ~ treatment * (timepoint + genotype) + (1 | block / splitPlot) + (1 | tree)
-E4_DESIGN <- ~ treatment * timepoint + (1 | block) + (1 | tree)
+E1_DESIGN <- ~ timepoint * duration + (1 | block) + (1 | tree) + (1 | pot)
+E2_DESIGN <- ~ timepoint * duration + (1 | block) + (1 | tree) + (1 | pot)
+E3_DESIGN <- ~ (timepoint + genotype) * treatment + (1 | block / splitPlot) + (1 | tree)
+E4_DESIGN <- ~ timepoint * treatment + (1 | block) + (1 | tree)
 
-E1_E2_DESIGN <- ~ duration * (timepoint + experiment) + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
+E1_E2_DESIGN <- ~ (timepoint + experiment) * duration + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
 
 
 # Load custom functions
@@ -161,7 +161,10 @@ e2_2025_09_canker <- load_data(
 
 # Combine E2 tables
 
-merge_cols <- c("diameter", "heaght", "health")
+merge_cols <- c(
+  "diameter", "height", "health",
+  "rasp_cankers", "leaf_scar_cankers"
+)
 
 e2 <- Reduce(
   function(x, y) {
@@ -175,6 +178,9 @@ e2 <- Reduce(
 
 e2[, diameter := coalesce(diameter, diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
 e2[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+e2[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
+e2[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
 
 # Add experiment id column
 e2[, experiment := "E2"]
@@ -405,8 +411,8 @@ plot_tree_health <- function(health_summary, x, facet_rows = NULL) {
     y = "N",
     fill = "health",
     color = "health",
-    position = position_dodge(0.8),
-    legend = "bottom",
+    # position = position_dodge(0.8),
+    legend = "right",
     palette = c(
       healthy = latte$green,
       # unhealthy = latte$yellow,
@@ -416,7 +422,7 @@ plot_tree_health <- function(health_summary, x, facet_rows = NULL) {
   )
 
   if (!is.null(facet_rows)) {
-    p <- p + facet_wrap(vars(!!sym(facet_rows)), ncol = 1)
+    p <- p + facet_wrap(vars(!!sym(facet_rows)), ncol = 2)
   }
 
   p + labs(
@@ -438,12 +444,16 @@ plot_tree_health(
 ggsave(filename = "tree_health_e1_e2.png", path = figures_dir)
 
 plot_tree_health(
-  e3_health_summary[timepoint == "T1" & (health == "healthy" | health == "dead")], 
+  e3_health_summary[
+    timepoint == "T1" & health %in% c("healthy", "dead")
+  ][,
+    health := factor(health, levels = c("dead", "healthy"))
+  ],
   "treatment", "genotype"
 )
 ggsave(
-  filename = "tree_health_e3.png", path = figures_dir,
-  width = 10, height = 10, units = "cm"  
+  filename = "tree_health_e3_wide.png", path = figures_dir,
+  width = 20, height = 9, units = "cm"
 )
 
 plot_tree_health(e4_health_summary[timepoint == "T2"], "treatment")
@@ -742,6 +752,66 @@ plot_growth <- function(data, measurement) {
 
 ```
 
+### Growth rate
+
+```{r growth_rate}
+
+growth_rate <- function(data, by){
+  # Filter data for T1 and T3 timepoints
+  data_subset <- data[timepoint %in% c("T1", "T3")]
+
+  # Remove height data for broken trees
+  broken <- unique(data_subset[health %in% c("top_broken", "top_dead"), tree])
+  data_subset[tree %in% broken, height := NA]
+
+  # Identify factor columns
+  factor_cols <- names(data)[sapply(data, is.factor)]
+  factor_cols <- factor_cols[!factor_cols %in% c("timepoint", "height")]
+
+  # Calculate growth rate for height
+  height_growth <- data_subset[
+    ,
+    .(
+      initial_height = height[timepoint == "T1"],
+      final_height = height[timepoint == "T3"]
+    ),
+    by = by
+  ][, `:=`(
+    height_absolute = final_height - initial_height,
+    height_relative = (final_height - initial_height) / initial_height,
+    height_relative_ln = log(final_height / initial_height)
+  )]
+
+  # Calculate growth rate for diameter
+  diameter_growth <- data_subset[
+    ,
+    .(
+      initial_diameter = diameter[timepoint == "T1"],
+      final_diameter = diameter[timepoint == "T3"]
+    ),
+    by = by
+  ][, `:=`(
+    diameter_absolute = final_diameter - initial_diameter,
+    diameter_relative = (final_diameter - initial_diameter) / initial_diameter,
+    diameter_relative_ln = log(final_diameter / initial_diameter)
+  )]
+
+  # Retain factor columns
+  factor_data <- unique(data_subset[, .SD, .SDcols = unique(c(by, factor_cols))], by = by)
+
+  # Merge height and diameter growth rates
+  growth_data <- merge(height_growth, diameter_growth, by = by, all = TRUE)
+  merge(factor_data, growth_data, by = by, all.x = TRUE)
+}
+
+
+e1_growth <- growth_rate(e1, "tree")
+e2_growth <- growth_rate(e2, "tree")
+# e3_growth <- growth_rate(e3, "pot")
+# e4_growth <- growth_rate(e4, "pot")
+
+```
+
 ### Growth plots
 
 ```{r growth_plots}
@@ -791,22 +861,23 @@ ggsave(filename = "E2_growth_plots.png", path = figures_dir)
 
 # Models
 
-# design <- y ~ duration * timepoint + (1 | block) + (1 | tree) + (1 | pot)
+design <- y ~ duration + (1 | block) + (1 | pot)
 
 # E1 diameter model
 
-e1_diameter_model <- lmer(update(E1_DESIGN, diameter ~ .), data = e1)
+e1_diameter_model <- lmer(update(design, diameter_relative_ln ~ .), data = e1_growth)
 check_model(e1_diameter_model)
 Anova(e1_diameter_model, type = 3) |> print()
+emmeans(e1_diameter_model, trt.vs.ctrl ~ duration)
 
 
 # E2 diameter model
 
-e2_diameter_model <- lmer(update(E2_DESIGN, diameter ~ .), data = e2)
+e2_diameter_model <- lmer(update(design, diameter_relative_ln ~ .), data = e2_growth)
 check_model(e2_diameter_model)
 # summary(e2_diameter_model)
 Anova(e2_diameter_model, type = 3) |> print()
-emm_diameter_e2 <- emmeans(e2_diameter_model, trt.vs.ctrl ~ duration | timepoint)
+emm_diameter_e2 <- emmeans(e2_diameter_model, trt.vs.ctrl ~ duration)
 print(emm_diameter_e2)
 plot(emm_diameter_e2)
 
@@ -817,9 +888,10 @@ plot(emm_diameter_e2)
 
 # design <- y ~ treatment * experiment * timepoint + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
 
+design <- ~ experiment * duration + (1 | experiment:block) + (1 | experiment:pot)
 
 e1_e2_diameter_model <- lmer(
-  update(E1_E2_DESIGN, diameter ~ .),
+  update(design, diameter_relative_ln ~ .),
   data = e1_e2[duration != 8]
 )
 
@@ -838,42 +910,26 @@ plot(emm_diameter_e1_e2)
 
 top_removals <- c("top_broken", "top_missing")
 
-# E1 height
-# plot_growth(
-#   summarise_growth(e1, "height", top_removals),
-#   "height"
-# )
+design <- ~ duration + (1 | block) + (1 | pot)
+
 
 # E1 height model
-e1_height_model <- lmer(
-  # log(height) ~ duration + timepoint + duration:timepoint + (1 | block) + (1 | tree) + (1 | pot), # + (timepoint | tree),
-  update(E1_DESIGN, height ~ .),
-  data = e1[!(health %in% top_removals)]
-)
 
+e1_height_model <- lmer(update(design, height_relative_ln ~ .), data = e1_growth)
 # Check model assumptions
 check_model(e1_height_model)
 # summary(e1_height_model)
 Anova(e1_height_model, type = 3) |> print()
-# emmeans(e1_height_model, ~ duration | timepoint)
-
-# E2 height
-# plot_growth(
-#   summarise_growth(e2, "height", top_removals),
-#   "height"
-# )
+emmeans(e1_height_model, trt.vs.ctrl ~ duration)
 
 # E2 height model
-e2_height_model <- lmer(
-  update(E2_DESIGN, height ~ .),
-  data = e2[!(health %in% top_removals)]
-)
 
+e2_height_model <- lmer(update(design, height_relative_ln ~ .), data = e2_growth)
 # Check model assumptions
 check_model(e2_height_model)
 # summary(e2_height_model)
 Anova(e2_height_model, type = 3) |> print()
-emm_height <- emmeans(e2_height_model, trt.vs.ctrl ~ duration | timepoint)
+emm_height <- emmeans(e2_height_model, trt.vs.ctrl ~ duration)
 print(emm_height)
 plot(emm_height) #, comparisons = TRUE)
 
@@ -1177,8 +1233,6 @@ Anova(e3_leaf_scar_canker_model, type = 3) |> print()
 emm_e3_leaf_scar_canker <- emmeans(e3_leaf_scar_canker_model, trt.vs.ctrl ~ treatment | genotype)
 print(emm_e3_rasp_canker)
 plot(emm_e3_rasp_canker)
-
-emmeans(e3_leaf_scar_canker_model, ~ genotype | treatment)
 
 ```
 
