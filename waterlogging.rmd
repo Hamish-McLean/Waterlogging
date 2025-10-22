@@ -126,6 +126,8 @@ e1[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL
 # Add experiment id column
 e1[, experiment := "E1"]
 
+# head(e1)
+
 ```
 
 ### Experiment 2
@@ -154,7 +156,7 @@ e2_2025_08_growth <- load_data(
 )
 
 e2_2025_09_canker <- load_data(
-  data_dir, "2025-09 E2 canker assessment.xlsx", 
+  data_dir, "2025-09 E2 canker assessment.xlsx",
   c("rasp_cankers", "leaf_scar_cankers")
 )
 
@@ -194,6 +196,8 @@ e2 <- merge(
 )
 e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
 
+# head(e2)
+
 ```
 
 ### Experiment 3
@@ -216,19 +220,37 @@ e3_2025_09_cankers <- load_data(
   )
 )
 
+e3_2025_09_growth <- load_data(
+  data_dir, "2025-09 E3 growth measurements.xlsx", "data"
+)
+
 # e3_2024_10_growth |> head()
 # e3_2025_05_cankers |> head()
 
 # Combine E3 tables
 
+merge_cols <- c(
+  "diameter", "height", "health",
+  "rasp_cankers", "leaf_scar_cankers",
+  "rasp_inoculations", "scar_inoculations"
+)
+
 e3 <- Reduce(
   function(x, y) {
     # Merge on common columns
     common_cols <- intersect(colnames(x), colnames(y))
+    common_cols <- common_cols[!common_cols %in% merge_cols]
     merge(x, y, by = common_cols, all = TRUE)
   },
-  list(e3_2024_10_growth, e3_2025_05_cankers, e3_2025_09_cankers)
+  list(e3_2024_10_growth, e3_2025_05_cankers, e3_2025_09_cankers, e3_2025_09_growth)
 )[, experiment := "E3"]
+
+e3[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e3[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+e3[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+e3[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
+e3[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
+e3[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
 
 e3[, treatment := factor(treatment, levels = c(
   "Control", "Autumn", "Winter", "Spring"
@@ -236,7 +258,7 @@ e3[, treatment := factor(treatment, levels = c(
 
 setnames(e3, "split-plot", "splitPlot")
 
-# e3 |> head()
+# head(e3)
 
 ```
 
@@ -254,22 +276,45 @@ e4_2025_05_cankers <- load_data(
   )
 )
 
+e4_2025_09_growth <- load_data(
+  data_dir, "2025-09 E4 growth measurements.xlsx", c("diameter", "extension_mean")
+)
+
+e4_extension <- load_data(
+  data_dir, "2025-09 E4 growth measurements.xlsx", "extension"
+)
+
 # e4_2024_12_growth |> head()
 # e4_2025_05_cankers |> head()
 
 # Combine E4 tables
+
+merge_cols <- c(
+  "diameter", "height", "health",
+  "rasp_cankers", "leaf_scar_cankers",
+  "rasp_inoculations", "scar_inoculations"
+)
+
 e4 <- Reduce(
   function(x, y) {
     # Merge on common columns
     common_cols <- intersect(colnames(x), colnames(y))
+    common_cols <- common_cols[!common_cols %in% merge_cols]
     merge(x, y, by = common_cols, all = TRUE)
   },
-  list(e4_2024_12_growth, e4_2025_05_cankers)
+  list(e4_2024_12_growth, e4_2025_05_cankers, e4_2025_09_growth, e4_extension)
 )[, experiment := "E4"]
+
+e4[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e4[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+# e4[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
+# e4[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
+# e4[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
 
 e4[, treatment := factor(paste0(season, duration))]
 
-# e4 |> head()
+# head(e4)
+# names(e4)
 
 ```
 
@@ -756,13 +801,13 @@ plot_growth <- function(data, measurement) {
 
 ```{r growth_rate}
 
-growth_rate <- function(data, by){
+growth_rate <- function(data, by, final = "T3") {
   # Filter data for T1 and T3 timepoints
-  data_subset <- data[timepoint %in% c("T1", "T3")]
+  data_subset <- data[timepoint %in% c("T1", final)]
 
   # Remove height data for broken trees
-  broken <- unique(data_subset[health %in% c("top_broken", "top_dead"), tree])
-  data_subset[tree %in% broken, height := NA]
+  broken <- unique(data_subset[health %in% c("top_broken", "top_dead"), get(by)])
+  data_subset[get(by) %in% broken, height := NA]
 
   # Identify factor columns
   factor_cols <- names(data)[sapply(data, is.factor)]
@@ -773,7 +818,7 @@ growth_rate <- function(data, by){
     ,
     .(
       initial_height = height[timepoint == "T1"],
-      final_height = height[timepoint == "T3"]
+      final_height = height[timepoint == final]
     ),
     by = by
   ][, `:=`(
@@ -787,7 +832,7 @@ growth_rate <- function(data, by){
     ,
     .(
       initial_diameter = diameter[timepoint == "T1"],
-      final_diameter = diameter[timepoint == "T3"]
+      final_diameter = diameter[timepoint == final]
     ),
     by = by
   ][, `:=`(
@@ -807,8 +852,10 @@ growth_rate <- function(data, by){
 
 e1_growth <- growth_rate(e1, "tree")
 e2_growth <- growth_rate(e2, "tree")
-# e3_growth <- growth_rate(e3, "pot")
-# e4_growth <- growth_rate(e4, "pot")
+# e1_e2_growth <- growth_rate(e1_e2, "tree")
+
+e3_growth <- growth_rate(e3, "pot", "T2")
+e4_growth <- growth_rate(e4, "pot", "T2")
 
 ```
 
@@ -827,7 +874,6 @@ ggarrange(
 )
 ggsave(filename = "E1_growth_plots.png", path = figures_dir)
 
-
 # E2 combined
 
 ggarrange(
@@ -838,6 +884,87 @@ ggarrange(
   common.legend = TRUE, legend = "bottom"
 )
 ggsave(filename = "E2_growth_plots.png", path = figures_dir)
+
+```
+
+```{r growth plots 2}
+
+# Growth plots 2
+plotGrowthE1E2 <- function(data, y, metric) {
+  ggerrorplot(
+    data = data,
+    x = "duration",
+    y = y,
+    add = "jitter",
+    desc_stat = "mean_ci",
+    size = 1,
+    position = position_dodge(0.5),
+    add.params = list(alpha = 0.5)
+  ) + labs(
+    title = metric,
+    x = "Waterlogging duration (weeks)"
+    # y = "ln(height2 - height1)"
+  )
+}
+
+ggarrange(
+  plotGrowthE1E2(e1_growth, "height_relative_ln", "height"),
+  plotGrowthE1E2(e1_growth, "diameter_relative_ln", "diameter")
+)
+ggsave(filename = "growth_E1.png", path = figures_dir)
+
+ggarrange(
+  plotGrowthE1E2(e2_growth, "height_relative_ln", "height"),
+  plotGrowthE1E2(e2_growth, "diameter_relative_ln", "diameter")
+)
+ggsave(filename = "growth_E2.png", path = figures_dir)
+
+
+plotGrowthE3 <- function(data, y, metric) {
+  ggerrorplot(
+    data = data,
+    x = "treatment",
+    y = y,
+    add = "jitter",
+    desc_stat = "mean_ci",
+    size = 1,
+    position = position_dodge(0.5),
+    add.params = list(alpha = 0.5)
+    # facet.by = "genotype"
+  ) + facet_wrap(~ genotype, ncol = 1) + labs(
+    title = metric,
+    x = "Waterlogging season"
+    # y = "ln(height2 - height1)"
+  )
+}
+
+ggarrange(
+  plotGrowthE3(e3_growth, "height_relative_ln", "height"),
+  plotGrowthE3(e3_growth, "diameter_relative_ln", "diameter")
+  # ncol = 1
+)
+ggsave(filename = "growth_E3.png", path = figures_dir)
+
+
+plotGrowthE4 <- function(data, y, metric) {
+  ggerrorplot(
+    data = data,
+    x = "treatment",
+    y = y,
+    add = "jitter",
+    desc_stat = "mean_ci",
+    size = 1,
+    position = position_dodge(0.5),
+    add.params = list(alpha = 0.5)
+  ) + labs(
+    title = metric,
+    x = "Waterlogging treatment"
+    # y = "ln(height2 - height1)"
+  )
+}
+
+plotGrowthE4(e4_growth, "diameter_relative_ln", "diameter")
+ggsave(filename = "growth_E4.png", path = figures_dir)
 
 ```
 
@@ -892,7 +1019,7 @@ design <- ~ experiment * duration + (1 | experiment:block) + (1 | experiment:pot
 
 e1_e2_diameter_model <- lmer(
   update(design, diameter_relative_ln ~ .),
-  data = e1_e2[duration != 8]
+  data = e1_e2_growth[duration != 8]
 )
 
 check_model(e1_e2_diameter_model)
@@ -901,6 +1028,28 @@ Anova(e1_e2_diameter_model, type = 3) |> print()
 emm_diameter_e1_e2 <- emmeans(e1_e2_diameter_model, trt.vs.ctrl ~ duration | experiment | timepoint)
 print(emm_diameter_e1_e2)
 plot(emm_diameter_e1_e2)
+
+
+# E3
+design <- y ~ genotype * treatment + (1 | block / splitPlot)
+
+e3_diameter_model <- lmer(update(design, diameter_relative_ln ~ .), data = e3_growth)
+check_model(e3_diameter_model)
+Anova(e3_diameter_model, type = 3) |> print()
+emmeans(e3_diameter_model, pairwise ~ genotype) |> plot()
+emmeans(e3_diameter_model, trt.vs.ctrl ~ treatment | genotype) |> plot()
+emmeans(e3_diameter_model, trt.vs.ctrl ~ treatment | genotype)
+
+
+# E4
+design <- y ~ treatment + (1 | block)
+
+e4_diameter_model <- lmer(update(design, diameter_relative_ln ~ .), data = e4_growth)
+check_model(e4_diameter_model)
+Anova(e4_diameter_model, type = 3) |> print()
+emmeans(e4_diameter_model, trt.vs.ctrl ~ treatment)
+emmeans(e4_diameter_model, trt.vs.ctrl ~ treatment) |> plot()
+
 
 ```
 
@@ -947,6 +1096,16 @@ Anova(e1_e2_height_model, type = 3) |> print()
 emm_height_e1_e2 <- emmeans(e1_e2_height_model, trt.vs.ctrl ~ duration | experiment | timepoint)
 print(emm_height_e1_e2)
 plot(emm_height_e1_e2)
+
+
+# E3
+design <- y ~ genotype * treatment + (1 | block / splitPlot)
+
+e3_diameter_model <- lmer(update(design, height_relative_ln ~ .), data = e3_growth)
+check_model(e3_diameter_model)
+Anova(e3_diameter_model, type = 3) |> print()
+emmeans(e3_diameter_model, trt.vs.ctrl ~ treatment | genotype)
+
 
 ```
 
@@ -1127,7 +1286,48 @@ ggsave(
 
 ```{r E4 canker plots}
 
-# e4_canker_summary <- e4
+e4_canker_summary <- melt(
+  e4[timepoint == "T2" & (!is.na(rasp_inoculations) | !is.na(leaf_scar_inoculations)), ],
+  id.vars = c("block", "plot", "treatment"),
+  variable.name = "type",
+  measure = list(
+    cankers = c("rasp_cankers", "leaf_scar_cankers"),
+    inoculations = c("rasp_inoculations", "leaf_scar_inoculations")
+  ),
+)[
+  , .(
+    cankers = sum(cankers, na.rm = TRUE),
+    inoculations = sum(inoculations, na.rm = TRUE),
+    N = .N
+  ), by = .(plot, treatment, type)
+][
+  , `:=`(
+    proportion = cankers / inoculations,
+    type = factor(type, labels = c("rasp wound", "leaf scar"))
+  )
+]
+
+ggerrorplot(
+  data = e4_canker_summary,
+  x = "treatment",
+  y = "proportion",
+  add = "jitter",
+  desc_stat = "mean_ci", # mean and CI
+  size = 0.6,
+  position = position_dodge(0.5),
+  ggtheme = theme_bw(),
+  add.params = list(alpha = 0.3) # Set alpha for jitter points
+) + facet_grid(
+  ~ type
+) + labs(
+  title = "Experiment 4: waterlogging timing and duration",
+  x = "Treatment",
+  y = "Cankers per inoculation point"
+)
+ggsave(
+  filename = "canker_plots_E4_T2.png", path = figures_dir,
+  width = 18, height = 10, units = "cm"
+)
 
 ```
 
@@ -1206,6 +1406,8 @@ plot(sim)
 Anova(e3_rasp_canker_model, type = 3) |> print()
 # emmeans(e3_rasp_canker_model, specs = trt.vs.ctrl ~ treatment, by = "genotype", type = "response") |> plot()
 
+emmeans(e3_rasp_canker_model, pairwise ~ genotype, type = "response")
+
 emm_e3_rasp_canker <- emmeans(e3_rasp_canker_model, trt.vs.ctrl ~ treatment | genotype, type = "response")
 print(emm_e3_rasp_canker)
 plot(emm_e3_rasp_canker)
@@ -1230,6 +1432,9 @@ plot(sim)
 Anova(e3_leaf_scar_canker_model, type = 3) |> print()
 
 # emmeans
+emmeans(e3_leaf_scar_canker_model, pairwise ~ genotype, type = "response")
+emmeans(e3_leaf_scar_canker_model, trt.vs.ctrl ~ treatment, type = "response") |> plot()
+
 emm_e3_leaf_scar_canker <- emmeans(e3_leaf_scar_canker_model, trt.vs.ctrl ~ treatment | genotype)
 print(emm_e3_rasp_canker)
 plot(emm_e3_rasp_canker)
