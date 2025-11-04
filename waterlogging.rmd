@@ -24,6 +24,7 @@ knitr::opts_chunk$set(echo = TRUE, error = TRUE) #, message = FALSE, warning = F
 
 ```{r load_packages, include = FALSE}
 
+library(brglm2)
 library(car)
 library(data.table)
 library(DHARMa)
@@ -447,6 +448,10 @@ e4_health_summary <- summarise_tree_health(
 
 ### Tree health plots
 
+TODO:
+
+- Plot mortality of each block per treatment group with error bars
+
 ```{r tree_health_plots}
 
 plot_tree_health <- function(health_summary, x, facet_rows = NULL) {
@@ -515,9 +520,7 @@ Binomial mixed effects model using `glmer`.
 Experiments 1 & 2 combined.
 Design includes `experiment` as a fixed effect.
 
-DHARMa results fine. 
-Binned residuals out of bounds and collinearity very high. 
-Is this data suitable for modelling at all?
+GLMM approach
 
 ```{r tree_health_models_E1_E2}
 
@@ -526,7 +529,28 @@ healthy <-  c(
   "healthy", "top_broken", "broken", "nearly_dead", "unhealthy", "top_dead"
 )
 
-# Combine E1 and E2
+
+# E1
+
+e1_health <- e1[timepoint == "T2" & !is.na(health)][, health := fcase(
+  health %in% healthy, "healthy", health == "dead", "dead"
+) |> as.factor()]
+
+
+design <- health ~ duration + (1 | block / plot / pot)
+model <- glmmTMB(design, e1_health, family = betabinomial(link = "logit"))
+check_model(model)
+# Anova(model, type = 3)
+anova(update(model, . ~ (1 | block / plot / pot)), model)
+emmeans(model, trt.vs.ctrl ~ duration)
+
+m1 <- glmer(health ~ (1 | block / plot / pot), e1_health, family = binomial(link = "logit"))
+check_model(m1)
+anova(m1, model)
+
+
+# Combined E1 E2
+
 
 e1_e2_health <- rbind(e1, e2, fill = TRUE)[
   !is.na(health) & timepoint == "T2"
@@ -534,6 +558,7 @@ e1_e2_health <- rbind(e1, e2, fill = TRUE)[
   health %in% healthy, "healthy",
   health == "dead", "dead"
 ) |> as.factor()]
+
 
 design <- health ~ experiment * duration + (1 | experiment:block)
 
@@ -559,6 +584,103 @@ Anova(health_model, type = 3) |> print()
 
 ```
 
+GLM approach
+
+new approach:
+summarise by plot
+Use brglm2 bias reduction glm
+Or use betabinomiaol if overdispersed
+But how to handle split plot in E3?
+
+```{r mortality models E1 E2}
+
+mortalityByPlot <- function(data, timepoint = "T2") {
+  data[timepoint == timepoint & !is.na(health)][
+    , .(dead = sum(health == "dead"), total = .N),
+    by = .(plot, block, duration, experiment, treatment)
+  ]
+}
+
+
+# E1
+
+model <- glm(
+  cbind(dead, total - dead) ~ block + duration,
+  data   = mortalityByPlot(e1),
+  family = binomial(link = "logit"),
+  method = brglmFit # Firth-type bias reduction
+)
+# check_model(model) # fine
+# sim <- simulate_residuals(model)
+# testResiduals(sim)
+# testZeroInflation(sim)
+
+summary(model)
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+
+
+
+# betabinomial
+
+# model <- glmmTMB(
+#   cbind(dead, total - dead) ~ block + duration,
+#   data   = mortalityByPlot(e1),
+#   family = betabinomial(link = "logit")
+# )
+# # simulate_residuals(model) |> plot()
+# # check_model(model) # fine
+# summary(model)
+# anova(update(model, . ~ block), model, test = "LRT")
+# emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+
+
+# E2
+
+model <- glm(
+  cbind(dead, total - dead) ~ block + duration,
+  data   = mortalityByPlot(e2),
+  family = binomial(link = "logit"),
+  method = brglmFit
+)
+# check_model(model) # fine
+# sim <- simulate_residuals(model)
+# testResiduals(sim)
+# testZeroInflation(sim)
+
+summary(model)
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+# emmeans(model, ~ duration, type = "response") %>% pairs(adjust = "tukey")
+
+
+
+# Combine E1 and E2
+
+
+# GLM
+
+model <- glm(
+  cbind(dead, total - dead) ~ experiment:block + experiment * duration,
+  data   = mortalityByPlot(rbind(e1, e2, fill = TRUE)),
+  family = binomial(link = "logit"),
+  method = brglmFit
+)
+# check_model(model) # fine
+# sim <- simulate_residuals(model)
+# testResiduals(sim)
+# testZeroInflation(sim)
+
+summary(model)
+anova(update(model, . ~ experiment:block), model, test = "Chisq")
+anova(update(model, . ~ experiment/block + experiment:duration), model, test = "Chisq")
+anova(update(model, . ~ experiment:block + duration), model, test = "Chisq")
+anova(update(model, . ~ experiment/block + duration), model, test = "Chisq")
+
+emmeans(model, trt.vs.ctrl ~ duration | experiment, type = "response")
+
+
+```
 
 ### Experiment 3
 
@@ -568,6 +690,25 @@ DHARMa results fine.
 Some binned residuals out of bounds.
 
 ```{r tree_health_models_E3}
+
+mortalityByPlotE3 <- function(data, timepoint = "T2") {
+  data[timepoint == timepoint & !is.na(health)][
+    , .(dead = sum(health == "dead"), total = .N),
+    by = .(plot, block, genotype, treatment)
+  ]
+}
+
+design <- cbind(dead, total - dead) ~ genotype * treatment + (1 | block / genotype)
+# model <- glmer(design, data = mortalityByPlotE3(e3), family = binomial(link = "logit"))
+# check_model(model) # bad
+
+model <- glmmTMB(design, data = mortalityByPlotE3(e3), family = betabinomial(link = "logit"))
+check_model(model)
+
+
+
+
+
 
 e3_health <- copy(e3)
 # setnames(e3_health, "split-plot", "splitPlot")
@@ -609,6 +750,29 @@ Anova(health_model_e3, type = 3) |> print()
 ### Experiment 4
 
 ```{r tree_health_models_E4, eval = FALSE}
+
+model <- glm(
+  cbind(dead, total - dead) ~ block + treatment,
+  data   = mortalityByPlot(e4),
+  family = binomial(link = "logit"),
+  method = brglmFit
+)
+# check_model(model) # binned residuals out of bounds
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # significant dispersion
+# testZeroInflation(sim) # significant zero inflation
+
+summary(model)
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
+
+
+
+
+
+
+
+
 
 e4_health <- e4[!is.na(health)][,
   health := fcase(
@@ -968,6 +1132,185 @@ ggsave(filename = "growth_E4.png", path = figures_dir)
 
 ```
 
+
+### Growth slopes
+
+```{r growth slopes}
+
+design <- diameter ~ elapsed_years * duration + (1 + elapsed_years | tree) + (1 | block / plot / pot)
+e1_diameter_slope <- lmer(design, e1)
+summary(e1_diameter_slope)
+# Anova(e1_diameter_slope, type = 3)
+anova(e1_diameter_slope, ddf = "Kenward-Roger", type = 3)
+check_model(e1_diameter_slope)
+emmeans(e1_diameter_slope, trt.vs.ctrl ~ duration, var = "elapsed_years")
+
+
+
+# E3
+
+design <- diameter ~ elapsed_years:treatment + (elapsed_years | pot) #+ (1 | block/splitPlot)
+e3_diameter_slope <- lmer(design, e3)
+
+
+# Repeated measures approach
+design <- diameter ~ timepoint * genotype * treatment + (1 | block / genotype) + (1 | pot)
+e3_diameter_lmm <- lmer(design, e3)
+summary(e3_diameter_lmm)
+Anova(e3_diameter_lmm, type = 3)
+check_model(e3_diameter_lmm)
+emmeans(e3_diameter_lmm, trt.vs.ctrl ~ treatment | genotype)
+
+
+
+```
+
+### Growth covariate anova
+
+#### Diameter
+
+```{r diameter ancova}
+
+#' Pivot growth
+pivotGrowth <- function(data, pivot, values = c("diameter", "height")) {
+  dcast(data, pivot, value.var = values)
+}
+
+
+# E1
+
+pivot <- block + plot + pot + tree + duration ~ timepoint
+e1_growth <- pivotGrowth(e1, pivot)
+
+# First year growth
+design <- diameter_T2 ~ diameter_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e1_growth)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+# Total growth
+design <- diameter_T3 ~ diameter_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e1_growth)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+
+# E2
+
+pivot <- block + plot + pot + tree + duration ~ timepoint
+e2_growth <- pivotGrowth(e2, pivot)
+
+# First year growth
+design <- diameter_T2 ~ diameter_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e2_growth)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+# Total growth
+design <- diameter_T3 ~ diameter_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e2_growth)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+
+# E3
+
+pivot <- block + plot + pot + genotype + treatment ~ timepoint
+e3_growth <- pivotGrowth(e3, pivot)
+
+design <- diameter_T2 ~ diameter_T1 * genotype + genotype * treatment + (1 | block / genotype / plot)
+model <- lmer(design, e3_growth)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ treatment | genotype)
+
+
+# E4
+
+pivot <- pot + block + plot + treatment ~ timepoint
+e4_growth <- pivotGrowth(e4, pivot, values = "diameter")
+
+# Covariate approach
+design <- T2 ~ T1 + treatment + (1 | block / plot)
+model <- lmer(design, e4_growth)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ treatment)
+
+```
+
+#### Height
+
+```{r height ancova}
+
+height_remove <- c("broken", "top_dead")
+
+# E1
+
+e1_height <- e1_growth[!(tree %in% unique(e1[(health %in% height_remove), tree]))]
+
+# First year growth
+design <- height_T2 ~ height_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e1_height)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+# Total growth
+design <- height_T3 ~ height_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e1_height)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+
+# E2
+
+e2_height <- e2_growth[!(tree %in% unique(e2[(health %in% height_remove), tree]))]
+
+# First year growth
+design <- height_T2 ~ height_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e2_height)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+# Total growth
+design <- height_T3 ~ height_T1 + duration + (1 | block / plot / pot)
+model <- lmer(design, e2_height)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ duration)
+
+
+# E3
+
+e3_height <- e3_growth[!(pot %in% unique(e3[(health %in% height_remove), pot]))]
+
+# design <- height_T2 ~ height_T1 + genotype * treatment + (1 | block / genotype / plot)
+design <- height_T2 ~ height_T1 * genotype + genotype * treatment + (1 | block / genotype / plot)
+model <- lmer(design, e3_height)
+summary(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+# emmeans(model, trt.vs.ctrl ~ treatment | genotype)
+
+```
+
 ### Diameter
 
 #### Experiment 1 & 2
@@ -1036,7 +1379,7 @@ design <- y ~ genotype * treatment + (1 | block / splitPlot)
 e3_diameter_model <- lmer(update(design, diameter_relative_ln ~ .), data = e3_growth)
 check_model(e3_diameter_model)
 Anova(e3_diameter_model, type = 3) |> print()
-emmeans(e3_diameter_model, pairwise ~ genotype) |> plot()
+emmeans(e3_diameter_model, pairwise ~ genotype) |> confint()
 emmeans(e3_diameter_model, trt.vs.ctrl ~ treatment | genotype) |> plot()
 emmeans(e3_diameter_model, trt.vs.ctrl ~ treatment | genotype)
 
@@ -1340,8 +1683,10 @@ ggsave(
 e1_canker_data <- e1[!is.na(inoc_cankers)] |> as.data.frame()
 
 # E1 canker model
+# design <- cbind(inoc_cankers, inoc_points - inoc_cankers) ~ duration + (1 | block) + (1 | inoculation),
+design <- cbind(inoc_cankers, inoc_points - inoc_cankers) ~ duration + (1 | block / plot / pot) + (1 | inoculation)
 e1_canker_model <- glmer(
-  cbind(inoc_cankers, inoc_points - inoc_cankers) ~ duration + (1 | block) + (1 | inoculation),
+  design,
   family = binomial(link = "logit"),
   data = e1_canker_data
 )
@@ -1350,8 +1695,8 @@ e1_canker_model <- glmer(
 check_model(e1_canker_model)
 plot(simulateResiduals(e1_canker_model))
 
-# summary(e1_canker_model)
-Anova(e1_canker_model, type = 3) |> print()
+summary(e1_canker_model)
+Anova(e1_canker_model, type = 3)
 emmeans(e1_canker_model, trt.vs.ctrl ~ duration)
 
 ```
@@ -1361,8 +1706,10 @@ emmeans(e1_canker_model, trt.vs.ctrl ~ duration)
 ```{r E2 canker models}
 
 # E2 canker model
+# design <- cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block) + (1 | inoculation),
+design <- cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block / plot / pot) + (1 | inoculation)
 e2_canker_model <- glmer(
-  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ duration + (1 | block) + (1 | inoculation),
+  design,
   family = binomial(link = "logit"),
   data = e2[!is.na(rasp_cankers)][, duration := factor(duration)]
 )
@@ -1376,7 +1723,7 @@ testZeroInflation(sim)
 # Summary
 # summary(e2_canker_model)
 # exp(fixef(e2_canker_model)) # Odds ratios
-Anova(e2_canker_model, type = 3) |> print()
+Anova(e2_canker_model, type = 3)
 emmeans(e2_canker_model, trt.vs.ctrl ~ duration)
 
 ```
@@ -1388,8 +1735,9 @@ emmeans(e2_canker_model, trt.vs.ctrl ~ duration)
 # design <- y ~ treatment * genotype + (1 | block) + (1 | pot)
 
 # E3 rasp wound canker model
+design <- cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ genotype * treatment + (1 | block / genotype / plot) + (1 | inoculation_group)
 e3_rasp_canker_model <- glmer(
-  cbind(rasp_cankers, rasp_inoculations - rasp_cankers) ~ genotype * treatment + (1 | block / splitPlot) + (1 | inoculation_group),
+  design,
   family = binomial(link = "logit"),
   data = e3[timepoint == "T2" & !is.na(rasp_cankers)]
 )
@@ -1407,6 +1755,7 @@ Anova(e3_rasp_canker_model, type = 3) |> print()
 # emmeans(e3_rasp_canker_model, specs = trt.vs.ctrl ~ treatment, by = "genotype", type = "response") |> plot()
 
 emmeans(e3_rasp_canker_model, pairwise ~ genotype, type = "response")
+emmeans(e3_rasp_canker_model, pairwise ~ genotype, type = "response") |> confint()
 
 emm_e3_rasp_canker <- emmeans(e3_rasp_canker_model, trt.vs.ctrl ~ treatment | genotype, type = "response")
 print(emm_e3_rasp_canker)
@@ -1433,6 +1782,7 @@ Anova(e3_leaf_scar_canker_model, type = 3) |> print()
 
 # emmeans
 emmeans(e3_leaf_scar_canker_model, pairwise ~ genotype, type = "response")
+emmeans(e3_leaf_scar_canker_model, pairwise ~ genotype, type = "response") |> confint()
 emmeans(e3_leaf_scar_canker_model, trt.vs.ctrl ~ treatment, type = "response") |> plot()
 
 emm_e3_leaf_scar_canker <- emmeans(e3_leaf_scar_canker_model, trt.vs.ctrl ~ treatment | genotype)
