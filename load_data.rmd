@@ -1,0 +1,286 @@
+---
+title: "Load data"
+author: "Hamish McLean"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+---
+
+## Setup
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, error = TRUE) #, message = FALSE, warning = FALSE)
+
+```
+
+```{r load_packages, include = FALSE}
+
+library(data.table)
+library(dplyr)
+library(here)
+library(readxl)
+
+```
+
+```{r constants}
+
+# Set data and object directories
+data_dir   <- here("..", "Data")
+object_dir <- here("objects")
+
+# Load custom functions
+source(here("functions", "functions.R"))
+
+```
+
+## Load data
+
+### Experiment 1
+
+```{r load_data_E1}
+
+e1_2023 <- load_data(
+  data_dir, "2023 E1 growth measurements.xlsx",
+  c(
+    "d_spring", "d_fall", "h_spring", "h_fall", "health_fall",
+    "mainstem", "peripheral", "inoc_points", "aborted", "inoc_cankers"
+  )
+)
+
+# Combine diameter and height measurements
+e1_2023[, diameter := coalesce(d_spring, d_fall)]
+e1_2023[, height   := coalesce(h_spring, h_fall)]
+e1_2023[, c("d_spring", "d_fall", "h_spring", "h_fall") := NULL]
+
+# Rename health_fall to health
+e1_2023[, health := health_fall][, health_fall := NULL]
+
+# Calculate total cankers
+e1_2023[,
+  cankers := rowSums(.SD, na.rm = FALSE),
+  .SDcols = c("mainstem", "peripheral")
+]
+
+e1_2024_cankers <- load_data(
+  data_dir, "2024-09-23 E1 canker assessment.xlsx", "cankers"
+)
+
+e1_2024_growth <- load_data(
+  data_dir, "2024-11 E1 growth measurements.xlsx",
+  c("diameter", "height", "health")
+)
+
+e1_2023_cankers <- e1_2023[, c(
+  "block", "plot", "pot",  "duration", "timepoint", "inoculation",
+  "inoc_points", "cankers"
+)]
+
+# Combine E1 tables
+
+common_cols <- intersect(colnames(e1_2023), colnames(e1_2024_cankers))
+e1 <- merge(e1_2023, e1_2024_cankers, by = common_cols, all = TRUE)
+
+common_cols <- intersect(colnames(e1_2024_cankers), colnames(e1_2024_growth))
+e1 <- merge(e1, e1_2024_growth, by = common_cols, all = TRUE)
+
+e1[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e1[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+e1[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+
+# Add experiment id column
+e1[, experiment := "E1"]
+
+saveRDS(e1, file = here(object_dir, "e1.Rds"))
+
+```
+
+### Experiment 2
+
+```{r load_data_E2}
+
+e2_2024_05 <- load_data(
+  data_dir, "2024-05 E2 growth measurements.xlsx", "diameter"
+)
+
+e2_2024_09_cankers <- load_data(
+  data_dir, "2024-09-24 E2 canker assessment.xlsx", c(
+    "rasp_inoculations", "rasp_cankers",
+    "leaf_scar_inoculations", "leaf_scar_cankers"
+  )
+)
+
+e2_2024_12_growth <- load_data(
+  data_dir, "2024-12 E2 growth measurements.xlsx",
+  c("diameter", "height", "feather", "health")
+)
+
+e2_2025_08_growth <- load_data(
+  data_dir, "2025-08 E2 growth measurements.xlsx",
+  c("diameter", "height", "health")
+)
+
+e2_2025_09_canker <- load_data(
+  data_dir, "2025-09 E2 canker assessment.xlsx",
+  c("rasp_cankers", "leaf_scar_cankers")
+)
+
+
+# Combine E2 tables
+
+merge_cols <- c(
+  "diameter", "height", "health",
+  "rasp_cankers", "leaf_scar_cankers"
+)
+
+e2 <- Reduce(
+  function(x, y) {
+    # Merge on common columns
+    common_cols <- intersect(colnames(x), colnames(y))
+    common_cols <- common_cols[!common_cols %in% merge_cols]
+    merge(x, y, by = common_cols, all = TRUE)
+  },
+  list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth, e2_2025_08_growth, e2_2025_09_canker)
+)
+
+e2[, diameter := coalesce(diameter, diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e2[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+e2[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
+e2[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][
+  , c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL
+]
+
+# Add experiment id column
+e2[, experiment := "E2"]
+
+# Add height at T1 by subtracting feather at T2 from height at T2
+e2 <- merge(
+  e2,
+  e2[(!is.na(height) & !is.na(feather)), .(tree, height = height - feather, timepoint = "T1")],
+  by = c("tree", "timepoint"),
+  all.x = TRUE
+)
+e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+
+saveRDS(e2, file = here(object_dir, "e2.Rds"))
+
+```
+
+### Experiment 3
+
+```{r load_data_E3}
+
+e3_2024_10_growth <- load_data(
+  data_dir, "2024-10 E3 growth measurements.xlsx", "data"
+)
+
+e3_2025_05_cankers <- load_data(
+  data_dir, "2025-05 E3 canker assessment.xlsx", c(
+    "inoculations", "cankers"
+  )
+)
+
+e3_2025_09_cankers <- load_data(
+  data_dir, "2025-09 E3 canker assessment.xlsx", c(
+    "inoculations", "cankers"
+  )
+)
+
+e3_2025_09_growth <- load_data(
+  data_dir, "2025-09 E3 growth measurements.xlsx", "data"
+)
+
+# e3_2024_10_growth |> head()
+# e3_2025_05_cankers |> head()
+
+# Combine E3 tables
+
+merge_cols <- c(
+  "diameter", "height", "health",
+  "rasp_cankers", "leaf_scar_cankers",
+  "rasp_inoculations", "scar_inoculations"
+)
+
+e3 <- Reduce(
+  function(x, y) {
+    # Merge on common columns
+    common_cols <- intersect(colnames(x), colnames(y))
+    common_cols <- common_cols[!common_cols %in% merge_cols]
+    merge(x, y, by = common_cols, all = TRUE)
+  },
+  list(e3_2024_10_growth, e3_2025_05_cankers, e3_2025_09_cankers, e3_2025_09_growth)
+)[, experiment := "E3"]
+
+e3[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e3[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+e3[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+e3[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
+e3[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
+e3[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
+
+e3[, treatment := factor(treatment, levels = c(
+  "Control", "Autumn", "Winter", "Spring"
+))]
+
+setnames(e3, "split-plot", "splitPlot")
+
+saveRDS(e3, file = here(object_dir, "e3.Rds"))
+
+```
+
+### Experiment 4
+
+```{r load_data_E4}
+
+e4_2024_12_growth <- load_data(
+  data_dir, "2024-12 E4 growth measurements.xlsx", "diameter"
+)
+
+e4_2025_05_cankers <- load_data(
+  data_dir, "2025-05 E4 canker assessment.xlsx", c(
+    "inoculations", "cankers"
+  )
+)
+
+e4_2025_09_growth <- load_data(
+  data_dir, "2025-09 E4 growth measurements.xlsx", c("diameter", "extension_mean")
+)
+
+e4_extension <- load_data(
+  data_dir, "2025-09 E4 growth measurements.xlsx", "extension"
+)
+
+# e4_2024_12_growth |> head()
+# e4_2025_05_cankers |> head()
+
+# Combine E4 tables
+
+merge_cols <- c(
+  "diameter", "height", "health",
+  "rasp_cankers", "leaf_scar_cankers",
+  "rasp_inoculations", "scar_inoculations"
+)
+
+e4 <- Reduce(
+  function(x, y) {
+    # Merge on common columns
+    common_cols <- intersect(colnames(x), colnames(y))
+    common_cols <- common_cols[!common_cols %in% merge_cols]
+    merge(x, y, by = common_cols, all = TRUE)
+  },
+  list(e4_2024_12_growth, e4_2025_05_cankers, e4_2025_09_growth, e4_extension)
+)[, experiment := "E4"]
+
+e4[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
+e4[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
+# e4[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
+# e4[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
+# e4[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
+
+e4[, treatment := factor(paste0(season, duration))]
+
+# head(e4)
+# names(e4)
+
+saveRDS(e4, file = here(object_dir, "e4.Rds"))
+
+```
