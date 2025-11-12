@@ -68,278 +68,12 @@ e4 <- readRDS(here(object_dir, "e4.Rds"))
 
 ```
 
-## Tree health
+## Tree mortality
 
-```{r tree_health}
+Count of dead ond 'healthy' (not dead) trees summarised per plot (or per subplot
+for experiment 3).
 
-#' @title Summarise tree health
-#'
-summarise_tree_health <- function(data) {
-
-  # Check columns
-  if (!all(c(
-    "experiment", "timepoint", "duration", "health"
-  ) %in% colnames(data))) {
-    stop("Input data does not contain required columns.")
-  }
-
-  data_copy <- copy(data[, .(experiment, timepoint, duration, health)])
-
-  # Combine health categories
-  health_mapping <- list(
-    healthy = c("healthy", "top_broken", "broken"),
-    unhealthy = c("nearly_dead", "unhealthy", "top_dead")
-  )
-  data_copy[, health := fcase(
-    health %in% health_mapping$healthy, "healthy",
-    health %in% health_mapping$unhealthy, "unhealthy",
-    rep(TRUE, .N), health # Keep other categories unchanged
-  )]
-
-  health_summary <- data_copy[!is.na(health), .N, by = .(
-    experiment, timepoint, duration, health
-  )]
-  health_combinations <- CJ(
-    experiment = unique(data_copy$experiment),
-    timepoint = unique(data_copy$timepoint),
-    duration = unique(data_copy$duration),
-    health = c("healthy", "unhealthy", "dead", "missing")
-  )
-  health_summary <- merge(
-    health_combinations,
-    health_summary,
-    by = c("experiment", "timepoint", "duration", "health"),
-    all.x = TRUE
-  )
-  health_summary[is.na(N), N := 0] # Replace NA with 0 for missing combinations
-
-  health_summary[, health := factor(
-    health, levels = c("healthy", "unhealthy", "dead", "missing")
-  )]
-
-}
-
-#' @title Summarise tree health
-#'
-summarise_tree_health <- function(data, by) {
-
-  # Check columns
-  if (!all(by %in% colnames(data))) {
-    stop("Input data does not contain required columns.")
-  }
-
-  data_copy <- copy(data[, ..by])
-
-  # # Combine health categories
-  # health_mapping <- list(
-  #   healthy = c("healthy", "top_broken", "broken"),
-  #   unhealthy = c("nearly_dead", "unhealthy", "top_dead")
-  # )
-  # Class all living trees as healthy
-  health_mapping <- list(
-    healthy = c(
-      "healthy", "top_broken", "broken", "nearly_dead", "unhealthy", "top_dead"
-    )
-  )
-
-  data_copy[, health := fcase(
-    health %in% health_mapping$healthy, "healthy",
-    # health %in% health_mapping$unhealthy, "unhealthy",
-    rep(TRUE, .N), health # Keep other categories unchanged
-  )]
-  health_levels <- c("healthy", "dead", "missing")
-
-  # Generate all combinations of by columns and health
-  # comb_list <- lapply(by, function(col) {
-  #   ifelse(col == "health", health_levels, unique(data_copy[[col]]))
-  # })
-  comb_list <- lapply(by, function(col) unique(data_copy[[col]]))
-  names(comb_list) <- by
-  comb_list$health <- c("healthy", "dead", "missing")
-  health_combinations <- do.call(CJ, comb_list)
-
-  # Summarise health data
-  health_summary <- data_copy[!is.na(health), .N, by = by]
-
-  health_summary <- merge(
-    health_combinations,
-    health_summary,
-    by = by,
-    all.x = TRUE
-  )
-
-  health_summary[is.na(N), N := 0] # Replace NA with 0 for missing combinations
-
-  # Reorder health factor levels
-  health_summary[, health := factor(
-    health, levels = health_levels
-  )]
-
-}
-
-e1_health_summary <- summarise_tree_health(
-  e1, c("experiment", "timepoint", "duration", "health")
-)
-
-e2_health_summary <- summarise_tree_health(
-  e2, c("experiment", "timepoint", "duration", "health")
-)
-
-e3_health_summary <- summarise_tree_health(
-  e3, c("experiment", "timepoint", "treatment", "genotype", "health")
-)
-
-e4_health_summary <- summarise_tree_health(
-  e4, c("experiment", "timepoint", "treatment", "health")
-)
-
-```
-
-### Tree health plots
-
-TODO:
-
-- Plot mortality of each block per treatment group with error bars
-
-```{r tree_health_plots}
-
-plot_tree_health <- function(health_summary, x, facet_rows = NULL) {
-  p <- ggbarplot(
-    health_summary,
-    x = x,
-    y = "N",
-    fill = "health",
-    color = "health",
-    # position = position_dodge(0.8),
-    legend = "right",
-    palette = c(
-      healthy = latte$green,
-      # unhealthy = latte$yellow,
-      dead = latte$red
-      # missing = latte$text
-    )
-  )
-
-  if (!is.null(facet_rows)) {
-    p <- p + facet_wrap(vars(!!sym(facet_rows)), ncol = 2)
-  }
-
-  p + labs(
-    # title = "Tree Health by Treatment",
-    x = paste("Waterlogging", x),
-    y = "Number of Trees"
-    # fill = "Health Category"
-  )
-}
-
-# plot_tree_health(e1_health_summary)
-
-# plot_tree_health(e2_health_summary)
-
-plot_tree_health(
-  bind_rows(e1_health_summary, e2_health_summary)[timepoint == "T2"],
-  "duration", "experiment"
-)
-ggsave(filename = "tree_health_e1_e2.png", path = figures_dir)
-
-plot_tree_health(
-  e3_health_summary[
-    timepoint == "T1" & health %in% c("healthy", "dead")
-  ][,
-    health := factor(health, levels = c("dead", "healthy"))
-  ],
-  "treatment", "genotype"
-)
-ggsave(
-  filename = "tree_health_e3_wide.png", path = figures_dir,
-  width = 20, height = 9, units = "cm"
-)
-
-plot_tree_health(e4_health_summary[timepoint == "T2"], "treatment")
-ggsave(filename = "tree_health_e4.png", path = figures_dir)
-
-```
-
-## Tree health models
-
-Binomial mixed effects model using `glmer`.
-
-### Experiments 1 & 2
-
-Experiments 1 & 2 combined.
-Design includes `experiment` as a fixed effect.
-
-GLMM approach
-
-```{r tree_health_models_E1_E2}
-
-# Class all living trees as healthy
-healthy <-  c(
-  "healthy", "top_broken", "broken", "nearly_dead", "unhealthy", "top_dead"
-)
-
-
-# E1
-
-e1_health <- e1[timepoint == "T2" & !is.na(health)][, health := fcase(
-  health %in% healthy, "healthy", health == "dead", "dead"
-) |> as.factor()]
-
-
-design <- health ~ duration + (1 | block / plot / pot)
-model <- glmmTMB(design, e1_health, family = betabinomial(link = "logit"))
-check_model(model)
-# Anova(model, type = 3)
-anova(update(model, . ~ (1 | block / plot / pot)), model)
-emmeans(model, trt.vs.ctrl ~ duration)
-
-m1 <- glmer(health ~ (1 | block / plot / pot), e1_health, family = binomial(link = "logit"))
-check_model(m1)
-anova(m1, model)
-
-
-# Combined E1 E2
-
-
-e1_e2_health <- rbind(e1, e2, fill = TRUE)[
-  !is.na(health) & timepoint == "T2"
-][, health := fcase(
-  health %in% healthy, "healthy",
-  health == "dead", "dead"
-) |> as.factor()]
-
-
-design <- health ~ experiment * duration + (1 | experiment:block)
-
-health_model <- glmer(
-  design,
-  data = e1_e2_health,
-  family = binomial(link = "logit"),
-  # control = glmerControl(optimizer = "bobyqa")
-)
-
-# Check model assumptions
-check_model(health_model)
-
-# sim <- simulateResiduals(health_model)
-# plot(sim)
-# testOverdispersion(sim)
-# testZeroInflation(sim)
-
-# summary(health_model)
-Anova(health_model, type = 3) |> print()
-# ranova(health_model, type = 3)
-# emmeans(health_model, ~ duration | experiment) |> plot()
-
-```
-
-GLM approach
-
-new approach:
-summarise by plot
-Use brglm2 bias reduction glm
-Or use betabinomiaol if overdispersed
-But how to handle split plot in E3?
+Binomial GLM fit to mortality matrix with Firth-type bias reduction.
 
 ```{r mortality models E1 E2}
 
@@ -646,7 +380,7 @@ emmMortalityPlot <- function(data, x, emm, facet = NULL) {
     geom_jitter(
       data = data,
       aes(x = get(x), y = mortality),
-      width = 0.2, height = 0, alpha = 0.2, size = 2
+      width = 0.3, height = 0, alpha = 0.3, size = 2
     ) +
     geom_pointrange(
       data = emm,
@@ -659,19 +393,49 @@ emmMortalityPlot <- function(data, x, emm, facet = NULL) {
       x = "Waterlogging duration (weeks)", y = "Mortality",
       # caption = "Points: plot-level proportions; bars: model-adjusted estimates (emmeans)"
     ) +
-    theme_classic(base_size = 12)
+    theme_bw()#(base_size = 12)
 }
 
 # E1 E2 combined
 
-emmMortalityPlot(e1_e2_mortality, "duration", e1_e2_mortality_emm, "experiment")
+a <- emmMortalityPlot(e1_e2_mortality, "duration", e1_e2_mortality_emm, "experiment")
+a
 ggsave(filename = "mortality_E1_E2.png", path = figures_dir)
 
 
 # E3
 
-emmMortalityPlot(e3_mortality, "treatment", e3_mortality_emm, "genotype")
+# ggboxplot(mortalityByPlotE3(e3), "treatment", "mortality", facet.by = "genotype", add = "jitter") +
+#   scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1))
 
+
+
+mortalityBoxplot <- function(data, x, facet = NULL) {
+  p <- ggplot() +
+    geom_boxplot(
+      aes(x = get(x), y = mortality), data,
+      outliers = FALSE, width = 0.4
+    ) +
+    geom_jitter(
+      aes(x = get(x), y = mortality), data,
+      width = 0.3, height = 0, alpha = 0.3, size = 2
+    ) +
+    scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
+    labs(x = "Waterlogging treatment", y = "Mortality") +
+    theme_bw()#(base_size = 12)
+    
+  if(!is.null(facet)) p <- p + facet_wrap(~ get(facet))
+
+  p
+}
+
+b <- mortalityBoxplot(e3_mortality, "treatment", facet = "genotype")
+
+c <- mortalityBoxplot(mortalityByPlot(e4), "treatment")
+
+ggarrange(a, b, c, labels = c("A", "B", "C"), ncol = 1)
+
+ggsave(filename = "mortality_combined.png", path = figures_dir, width = 14, height = 20, units = "cm")
 
 ```
 
