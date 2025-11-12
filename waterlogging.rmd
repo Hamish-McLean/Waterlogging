@@ -43,280 +43,28 @@ library(scales)
 
 ```{r constants}
 
-# Set the working directory to the project root
-# here::set_here()
-
-# Set data and figures directories
+# Set object and figures directories
 data_dir    <- here("..", "Data")
+object_dir  <- here("objects")
 figures_dir <- here("figures")
 
-# Model designs
-E1_DESIGN <- ~ timepoint * duration + (1 | block) + (1 | tree) + (1 | pot)
-E2_DESIGN <- ~ timepoint * duration + (1 | block) + (1 | tree) + (1 | pot)
-E3_DESIGN <- ~ (timepoint + genotype) * treatment + (1 | block / splitPlot) + (1 | tree)
-E4_DESIGN <- ~ timepoint * treatment + (1 | block) + (1 | tree)
-
-E1_E2_DESIGN <- ~ (timepoint + experiment) * duration + (1 | experiment:block) + (1 | experiment:tree) + (1 | experiment:pot)
-
-
-# Load custom functions
-source(here("functions", "load_data.R"))
-
 latte <- list(
-  red = "#d20f39",
+  red    = "#d20f39",
   yellow = "#df8e1d",
-  green = "#40a02b",
-  text = "#4c4f69"
+  green  = "#40a02b",
+  text   = "#4c4f69"
 )
 
 ```
 
 ## Load data
 
-### Experiment 1
+```{r load data}
 
-```{r load_data_E1}
-
-e1_2023 <- load_data(
-  data_dir, "2023 E1 growth measurements.xlsx",
-  c(
-    "d_spring", "d_fall", "h_spring", "h_fall", "health_fall",
-    "mainstem", "peripheral", "inoc_points", "aborted", "inoc_cankers"
-  )
-)
-
-# Combine diameter and height measurements
-e1_2023[, diameter := coalesce(d_spring, d_fall)]
-e1_2023[, height   := coalesce(h_spring, h_fall)]
-e1_2023[, c("d_spring", "d_fall", "h_spring", "h_fall") := NULL]
-
-# Rename health_fall to health
-e1_2023[, health := health_fall][, health_fall := NULL]
-
-# Calculate total cankers
-e1_2023[,
-  cankers := rowSums(.SD, na.rm = FALSE),
-  .SDcols = c("mainstem", "peripheral")
-]
-
-e1_2024_cankers <- load_data(
-  data_dir, "2024-09-23 E1 canker assessment.xlsx", "cankers"
-)
-
-e1_2024_growth <- load_data(
-  data_dir, "2024-11 E1 growth measurements.xlsx",
-  c("diameter", "height", "health")
-)
-
-e1_2023_cankers <- e1_2023[, c(
-  "block", "plot", "pot",  "duration", "timepoint", "inoculation",
-  "inoc_points", "cankers"
-)]
-
-# Combine E1 tables
-
-common_cols <- intersect(colnames(e1_2023), colnames(e1_2024_cankers))
-e1 <- merge(e1_2023, e1_2024_cankers, by = common_cols, all = TRUE)
-
-common_cols <- intersect(colnames(e1_2024_cankers), colnames(e1_2024_growth))
-e1 <- merge(e1, e1_2024_growth, by = common_cols, all = TRUE)
-
-e1[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
-e1[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
-e1[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
-
-# Add experiment id column
-e1[, experiment := "E1"]
-
-# head(e1)
-
-```
-
-### Experiment 2
-
-```{r load_data_E2}
-
-e2_2024_05 <- load_data(
-  data_dir, "2024-05 E2 growth measurements.xlsx", "diameter"
-)
-
-e2_2024_09_cankers <- load_data(
-  data_dir, "2024-09-24 E2 canker assessment.xlsx", c(
-    "rasp_inoculations", "rasp_cankers",
-    "leaf_scar_inoculations", "leaf_scar_cankers"
-  )
-)
-
-e2_2024_12_growth <- load_data(
-  data_dir, "2024-12 E2 growth measurements.xlsx",
-  c("diameter", "height", "feather", "health")
-)
-
-e2_2025_08_growth <- load_data(
-  data_dir, "2025-08 E2 growth measurements.xlsx",
-  c("diameter", "height", "health")
-)
-
-e2_2025_09_canker <- load_data(
-  data_dir, "2025-09 E2 canker assessment.xlsx",
-  c("rasp_cankers", "leaf_scar_cankers")
-)
-
-
-# Combine E2 tables
-
-merge_cols <- c(
-  "diameter", "height", "health",
-  "rasp_cankers", "leaf_scar_cankers"
-)
-
-e2 <- Reduce(
-  function(x, y) {
-    # Merge on common columns
-    common_cols <- intersect(colnames(x), colnames(y))
-    common_cols <- common_cols[!common_cols %in% merge_cols]
-    merge(x, y, by = common_cols, all = TRUE)
-  },
-  list(e2_2024_05, e2_2024_09_cankers, e2_2024_12_growth, e2_2025_08_growth, e2_2025_09_canker)
-)
-
-e2[, diameter := coalesce(diameter, diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
-e2[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
-e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
-e2[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
-e2[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
-
-# Add experiment id column
-e2[, experiment := "E2"]
-
-# Add height at T1 by subtracting feather at T2 from height at T2
-e2 <- merge(
-  e2,
-  e2[(!is.na(height) & !is.na(feather)), .(tree, height = height - feather, timepoint = "T1")],
-  by = c("tree", "timepoint"),
-  all.x = TRUE
-)
-e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
-
-# head(e2)
-
-```
-
-### Experiment 3
-
-```{r load_data_E3}
-
-e3_2024_10_growth <- load_data(
-  data_dir, "2024-10 E3 growth measurements.xlsx", "data"
-)
-
-e3_2025_05_cankers <- load_data(
-  data_dir, "2025-05 E3 canker assessment.xlsx", c(
-    "inoculations", "cankers"
-  )
-)
-
-e3_2025_09_cankers <- load_data(
-  data_dir, "2025-09 E3 canker assessment.xlsx", c(
-    "inoculations", "cankers"
-  )
-)
-
-e3_2025_09_growth <- load_data(
-  data_dir, "2025-09 E3 growth measurements.xlsx", "data"
-)
-
-# e3_2024_10_growth |> head()
-# e3_2025_05_cankers |> head()
-
-# Combine E3 tables
-
-merge_cols <- c(
-  "diameter", "height", "health",
-  "rasp_cankers", "leaf_scar_cankers",
-  "rasp_inoculations", "scar_inoculations"
-)
-
-e3 <- Reduce(
-  function(x, y) {
-    # Merge on common columns
-    common_cols <- intersect(colnames(x), colnames(y))
-    common_cols <- common_cols[!common_cols %in% merge_cols]
-    merge(x, y, by = common_cols, all = TRUE)
-  },
-  list(e3_2024_10_growth, e3_2025_05_cankers, e3_2025_09_cankers, e3_2025_09_growth)
-)[, experiment := "E3"]
-
-e3[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
-e3[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
-e3[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
-e3[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
-e3[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
-e3[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
-
-e3[, treatment := factor(treatment, levels = c(
-  "Control", "Autumn", "Winter", "Spring"
-))]
-
-setnames(e3, "split-plot", "splitPlot")
-
-# head(e3)
-
-```
-
-### Experiment 4
-
-```{r load_data_E4}
-
-e4_2024_12_growth <- load_data(
-  data_dir, "2024-12 E4 growth measurements.xlsx", "diameter"
-)
-
-e4_2025_05_cankers <- load_data(
-  data_dir, "2025-05 E4 canker assessment.xlsx", c(
-    "inoculations", "cankers"
-  )
-)
-
-e4_2025_09_growth <- load_data(
-  data_dir, "2025-09 E4 growth measurements.xlsx", c("diameter", "extension_mean")
-)
-
-e4_extension <- load_data(
-  data_dir, "2025-09 E4 growth measurements.xlsx", "extension"
-)
-
-# e4_2024_12_growth |> head()
-# e4_2025_05_cankers |> head()
-
-# Combine E4 tables
-
-merge_cols <- c(
-  "diameter", "height", "health",
-  "rasp_cankers", "leaf_scar_cankers",
-  "rasp_inoculations", "scar_inoculations"
-)
-
-e4 <- Reduce(
-  function(x, y) {
-    # Merge on common columns
-    common_cols <- intersect(colnames(x), colnames(y))
-    common_cols <- common_cols[!common_cols %in% merge_cols]
-    merge(x, y, by = common_cols, all = TRUE)
-  },
-  list(e4_2024_12_growth, e4_2025_05_cankers, e4_2025_09_growth, e4_extension)
-)[, experiment := "E4"]
-
-e4[, diameter := coalesce(diameter.x, diameter.y)][, c("diameter.x", "diameter.y") := NULL]
-e4[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL]
-# e4[, rasp_cankers := coalesce(rasp_cankers.x, rasp_cankers.y)][, c("rasp_cankers.x", "rasp_cankers.y") := NULL]
-# e4[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
-# e4[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
-
-e4[, treatment := factor(paste0(season, duration))]
-
-# head(e4)
-# names(e4)
+e1 <- readRDS(here(object_dir, "e1.Rds"))
+e2 <- readRDS(here(object_dir, "e2.Rds"))
+e3 <- readRDS(here(object_dir, "e3.Rds"))
+e4 <- readRDS(here(object_dir, "e4.Rds"))
 
 ```
 
@@ -1026,7 +774,7 @@ summarise_growth <- function(data, measurement, remove_health = NULL) {
 #' @title Plot growth data
 #'
 plot_growth <- function(data, measurement) {
-  units = if (measurement == "diameter") {
+  units <- if (measurement == "diameter") {
     "mm"
   } else if (measurement == "height") {
     "cm"
@@ -1278,7 +1026,7 @@ model <- lmer(design, e1_growth)
 # testResiduals(model) # fine
 summary(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
-emmeans(model, trt.vs.ctrl ~ duration) 
+emmeans(model, trt.vs.ctrl ~ duration)
 e1_dia_T2_emm <- emmeans(model, ~ duration) |> as.data.table()
 
 # Total growth
@@ -2069,16 +1817,20 @@ e1_canker <- e1[
 # Model
 design <- cbind(cankers, inoc - cankers) ~ block + duration
 model <- glm(design, data = e1_canker, family = binomial(link = "logit"), method = brglmFit)
-check_model(model) # resonable
-sim <- simulate_residuals(model)
-testResiduals(sim) # good
-testDispersion(sim) # good
-testZeroInflation(sim) # good
+
+# check_model(model) # resonable but poor uniformity of residuals
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # good
+# testDispersion(sim) # good
+# testZeroInflation(sim) # good
 
 # Results
 summary(model)
 anova(update(model, . ~ block), model, test = "Chisq")
+# Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+
+e1_canker_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
 
 ```
 
@@ -2089,33 +1841,34 @@ emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 # E2 rasp
 e2_rasp_canker <- e2[
   !is.na(rasp_cankers) & !is.na(rasp_inoculations) & timepoint == "T2",
-  .(rasp_cankers = sum(rasp_cankers), rasp_inoc = sum(rasp_inoculations)),
+  .(cankers = sum(rasp_cankers), inoc = sum(rasp_inoculations)),
   by = .(plot, block, duration)
 ]
 
 # Model
-design <- cbind(rasp_cankers, rasp_inoc - rasp_cankers) ~ block + duration
+design <- cbind(cankers, inoc - cankers) ~ block + duration
 model <- glm(design, data = e2_rasp_canker, family = binomial(link = "logit"), method = brglmFit)
-check_model(model) # resonable
-sim <- simulate_residuals(model)
-testResiduals(sim) # significant dispersion
-testZeroInflation(sim)
 
-# Results
-anova(update(model, . ~ block), model, test = "Chisq")
-emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+# check_model(model) # resonable
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # significant dispersion
+# testZeroInflation(sim)
 
 # betabinomial
-design <- cbind(rasp_cankers, rasp_inoc - rasp_cankers) ~ block + duration
+design <- cbind(cankers, inoc - cankers) ~ block + duration
 model <- glmmTMB(design, data = e2_rasp_canker, family = betabinomial(link = "logit"))
-check_model(model) # 
-sim <- simulate_residuals(model)
-testResiduals(sim) # good
-testZeroInflation(sim) # good
+
+# check_model(model) #
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # good
+# testZeroInflation(sim) # good
 
 # Results
 anova(update(model, . ~ block), model, test = "Chisq")
+Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+
+e2_canker_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
 
 
 # E2 leaf scar
@@ -2123,30 +1876,6 @@ e2_ls_canker <- e2[!is.na(leaf_scar_cankers) & !is.na(leaf_scar_inoculations) & 
   .(ls_cankers = sum(leaf_scar_cankers), ls_inoc = sum(leaf_scar_inoculations)),
   by = .(plot, block, duration)
 ]
-
-# Model
-design <- cbind(ls_cankers, ls_inoc - ls_cankers) ~ block + duration
-model <- glm(design, data = e2_ls_canker, family = binomial(link = "logit"), method = brglmFit)
-check_model(model) # poor
-sim <- simulate_residuals(model)
-testResiduals(sim) # significant dispersion
-testZeroInflation(sim)
-
-# Results
-anova(update(model, . ~ block), model, test = "Chisq")
-emmeans(model, trt.vs.ctrl ~ duration, type = "response")
-
-# betabinomial
-design <- cbind(ls_cankers, ls_inoc - ls_cankers) ~ block + duration
-model <- glmmTMB(design, data = e2_ls_canker, family = betabinomial(link = "logit"))
-check_model(model) # 
-sim <- simulate_residuals(model)
-testResiduals(sim) #
-testZeroInflation(sim) #
-
-# Results
-anova(update(model, . ~ block), model, test = "Chisq")
-emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 
 ```
 
@@ -2157,16 +1886,207 @@ emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 # E3 rasp wounds
 e3_rasp_canker <- e3[
   !is.na(rasp_cankers) & !is.na(rasp_inoculations) & timepoint == "T2",
-  .(rasp_cankers = sum(rasp_cankers), rasp_inoc = sum(rasp_inoculations)),
+  .(cankers = sum(rasp_cankers), inoc = sum(rasp_inoculations)),
   by = .(plot, block, genotype, treatment)
 ]
 
+# Binomial GLMM
+design <- cbind(cankers, inoc - cankers) ~ genotype * treatment + (1 | block / genotype)
+model <- glmer(design, data = e3_rasp_canker, family = binomial(link = "logit"))
 
-design <- cbind(rasp_cankers, rasp_inoc - rasp_cankers) ~ genotype * treatment + (1 | block / genotype)
-model <- glm(design, data = e3_rasp_canker, family = binomial(link = "logit"), method = brglmFit)
-check_model(model) # poor
-sim <- simulate_residuals(model)
-testResiduals(sim) # significant dispersion
-testZeroInflation(sim)
+# check_model(model) # reasonable
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim) # fine
+
+# Results
+summary(model)
+anova(update(model, . ~ . - treatment - genotype:treatment), model, test = "Chisq")
+anova(update(model, . ~ . - genotype:treatment), model, test = "Chisq")
+
+
+# E3 rasp wounds
+e3_ls_canker <- e3[
+  !is.na(leaf_scar_cankers) & !is.na(leaf_scar_inoculations) & timepoint == "T2",
+  .(cankers = sum(leaf_scar_cankers), inoc = sum(leaf_scar_inoculations)),
+  by = .(plot, block, genotype, treatment)
+]
+
+# Binomial GLMM
+design <- cbind(cankers, inoc - cankers) ~ genotype * treatment + (1 | block / genotype)
+model <- glmer(design, data = e3_ls_canker, family = binomial(link = "logit"))
+
+# check_model(model) # reasonable
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim) # fine
+
+# Results
+summary(model)
+anova(update(model, . ~ . - treatment - genotype:treatment), model, test = "Chisq")
+anova(update(model, . ~ . - genotype:treatment), model, test = "Chisq")
+
+
+# Combined canker types
+e3_canker <- rbind(
+  e3_rasp_canker[, .(plot, block, genotype, treatment, cankers, inoc, type = "Rasp wound")],
+  e3_ls_canker[, .(plot, block, genotype, treatment, cankers, inoc, type = "Leaf scar")]
+)
+
+# Binomial GLMM
+design <- cbind(cankers, inoc - cankers) ~ (type + genotype) * treatment + (1 | block / genotype / plot)
+model <- glmer(design, data = e3_canker, family = binomial(link = "logit"), control = glmerControl(optimizer = "bobyqa"))
+
+# check_model(model) # reasonable, some collinearity
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim) # fine
+
+# Results
+summary(model)
+
+# Effect of treatment
+anova(update(model, . ~ . - treatment - genotype:treatment - type:treatment), model, test = "Chisq")
+anova(update(model, . ~ . - genotype:treatment), model, test = "Chisq")
+anova(update(model, . ~ . - type:treatment), model, test = "Chisq")
+emmeans(model, ~ treatment | c(type, genotype), type = "response")
+
+# Effect of genotype
+anova(update(model, . ~ . - genotype - genotype:treatment), model, test = "Chisq")
+emmeans(model, pairwise ~ genotype, type = "response")
+
+# Effect of type
+anova(update(model, . ~ . - type - type:treatment), model, test = "Chisq")
+emmeans(model, revpairwise ~ type, type = "response")
+
+
+
+e3_canker_emm <- setDT(as.data.frame(emmeans(model, ~ treatment | c(type, genotype), type = "response")))
+
+```
+
+### E4
+
+```{r}
+
+e4_rasp_canker <- e4[
+  !is.na(rasp_cankers) & !is.na(rasp_inoculations) & timepoint == "T2",
+  .(cankers = sum(rasp_cankers), inoc = sum(rasp_inoculations)),
+  by = .(plot, block, treatment)
+]
+
+# Model
+design <- cbind(cankers, inoc - cankers) ~ block + treatment
+model <- glm(design, data = e4_rasp_canker, family = binomial(link = "logit"), method = brglmFit)
+
+# check_model(model) # fine
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim)
+
+# Results
+summary(model)
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
+
+
+# Leaf scars
+e4_ls_canker <- e4[
+  !is.na(leaf_scar_cankers) & !is.na(leaf_scar_inoculations) & timepoint == "T2",
+  .(cankers = sum(leaf_scar_cankers), inoc = sum(leaf_scar_inoculations)),
+  by = .(plot, block, treatment)
+]
+
+# Model
+design <- cbind(cankers, inoc - cankers) ~ block + treatment
+model <- glm(design, data = e4_ls_canker, family = binomial(link = "logit"), method = brglmFit)
+
+# check_model(model) # fine
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim)
+
+# Results
+summary(model)
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
+
+
+# Combined canker types
+e4_canker <- rbind(
+  e4_rasp_canker[, .(plot, block, treatment, cankers, inoc, type = "Rasp wound")],
+  e4_ls_canker[, .(plot, block, treatment, cankers, inoc, type = "Leaf scar")]
+)
+
+# Binomial GLMM
+design <- cbind(cankers, inoc - cankers) ~ type * treatment + (1 | block / plot)
+model <- glmer(design, data = e4_canker, family = binomial(link = "logit"))#, control = glmerControl(optimizer = "bobyqa"))
+
+# check_model(model) # reasonable, some collinearity
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim) # fine
+
+# Results
+summary(model)
+anova(update(model, . ~ . - treatment - type:treatment), model, test = "Chisq")
+anova(update(model, . ~ . - type:treatment), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ treatment | type, type = "response")
+
+# Wound type
+anova(update(model, . ~ . - type - type:treatment), model, test = "Chisq")
+emmeans(model, revpairwise ~ type, type = "response")
+
+e4_canker_emm <- setDT(as.data.frame(emmeans(model, ~ treatment | type, type = "response")))
+
+```
+
+## Canker plots
+
+```{r}
+
+emmCankerPlot <- function(data, x, emm, xlab, facet = NULL) {
+  p <- ggplot() +
+    geom_jitter(
+      data = data,
+      aes(x = get(x), y = cankers / inoc),
+      width = 0.2, height = 0, alpha = 0.2, size = 2
+    ) +
+    geom_pointrange(
+      data = emm,
+      aes(x = get(x), y = prob, ymin = asymp.LCL, ymax = asymp.UCL),
+      fatten = 1.8, size = 1
+    ) +
+    # facet_wrap(~ get(facet)) +
+    scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
+    labs(
+      x = xlab, y = "Canker expression",
+      # caption = "Points: plot-level proportions; bars: model-adjusted estimates (emmeans)"
+    ) +
+    theme_bw()#base_size = 12)
+
+  if(!is.null(facet)) {
+    if(length(facet) == 1) p <- p + facet_wrap(as.formula(paste("~", facet)))
+    else p <- p + facet_grid(facet)
+  }
+  
+  p
+}
+
+a <- emmCankerPlot(e1_canker, "duration", e1_canker_emm, "Waterlogging duration (weeks)") +
+  theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
+b <- emmCankerPlot(e2_rasp_canker, "duration", e2_canker_emm, "Waterlogging duration (weeks)") +
+  theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
+c <- emmCankerPlot(e3_canker, "treatment", e3_canker_emm, "Waterlogging treatment", facet = c("genotype", "type"))
+d <- emmCankerPlot(e4_canker, "treatment", e4_canker_emm, "Waterlogging treatment", facet = "type") +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+ggarrange(
+  ggarrange(a, b, labels = c("A", "B"), vjust = 0.9),
+  c, d,
+  labels = c("", "C", "D"), vjust = 0.8,
+  nrow = 3, ncol = 1, heights = c(1, 2, 1)#, align = "hv"
+)
+ggsave(filename = "canker_combined.png", path = figures_dir, width = 14, height = 20, units = "cm")
 
 ```
