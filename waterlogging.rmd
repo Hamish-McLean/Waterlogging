@@ -189,6 +189,7 @@ e3_mortality <- mortalityByPlotE3(e3)
 
 
 design <- cbind(dead, total - dead) ~ genotype * treatment + (1 | block / genotype)
+
 model <- glmer(design, data = e3_mortality, family = binomial(link = "logit"))
 # check_model(model) # bad
 testResiduals(model)
@@ -196,21 +197,56 @@ testDispersion(model)
 summary(model)
 
 
-model <- glmmTMB(design, ziformula = ~ 0 + treatment, data = e3_mortality, family = betabinomial(link = "logit"))
-check_model(model)
-sim <- simulate_residuals(model)
-testResiduals(sim)
-testZeroInflation(sim)
+# model <- glmmTMB(design, ziformula = ~ 0 + treatment, data = e3_mortality, family = betabinomial(link = "logit"))
+
+model <- glmmTMB(design, dispformula = ~ genotype, data = e3_mortality, family = betabinomial(link = "logit"))
+# check_model(model) # High collinearity
+# sim <- simulate_residuals(model)
+# testResiduals(sim) # fine
+# testZeroInflation(sim) # fine
 
 VarCorr(model)
 summary(model)
+# Genotype
 anova(update(model, . ~ . - treatment - genotype:treatment), model, test = "Chisq")
+# Treatment
+anova(update(model, . ~ . - genotype - genotype:treatment), model, test = "Chisq")
+# Interaction
 anova(update(model, . ~ . - genotype:treatment), model, test = "Chisq")
+
 emmeans(model, trt.vs.ctrl ~ treatment | genotype, type = "response")
 emm <- emmeans(model, ~ treatment | genotype, type = "response")
 pairs(emm, by = "genotype", adjust = "tukey")
 
 e3_mortality_emm <- setDT(as.data.frame(emm))
+
+
+# Per genotype models
+design <- cbind(dead, total - dead) ~ block + treatment
+model <- glm(
+  design, data = e3_mortality[genotype == "MM106"],
+  family = binomial(link = "logit"), method = brglmFit
+)
+check_model(model) # Reasonable
+
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
+e3_mort_MM106_emm <- emmeans(model, ~ treatment, type = "response") |> as.data.frame()
+
+model <- glm(
+  design, data = e3_mortality[genotype == "M9"],
+  family = binomial(link = "logit"), method = brglmFit
+)
+check_model(model) # Reasonable
+
+anova(update(model, . ~ block), model, test = "Chisq")
+emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
+e3_mort_M9_emm <- emmeans(model, ~ treatment, type = "response") |> as.data.frame()
+
+e3_mort_emm <- bind_rows(
+  setDT(e3_mort_MM106_emm)[, genotype := "MM106"],
+  setDT(e3_mort_M9_emm)[, genotype := "M9"]
+)
 
 
 
@@ -375,35 +411,44 @@ mortalityPlot(e1)
 
 # emmeans error plot
 
-emmMortalityPlot <- function(data, x, emm, facet = NULL) {
-  ggplot() +
+emmMortalityPlot <- function(data, x, emm, facet = NULL, xlab = "Waterlogging treatment") {
+  p <- ggplot() +
     geom_jitter(
       data = data,
-      aes(x = get(x), y = mortality),
-      width = 0.3, height = 0, alpha = 0.3, size = 2
+      aes(x = get(x), y = mortality, colour = block),
+      width = 0.2, height = 0, alpha = 0.5, size = 2
     ) +
     geom_pointrange(
       data = emm,
       aes(x = get(x), y = prob, ymin = asymp.LCL, ymax = asymp.UCL),
       fatten = 1.8, size = 1
     ) +
-    facet_wrap(~ get(facet)) +
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
     labs(
-      x = "Waterlogging duration (weeks)", y = "Mortality",
+      x = xlab, y = "Mortality",
       # caption = "Points: plot-level proportions; bars: model-adjusted estimates (emmeans)"
     ) +
+    guides(colour = "none") +
     theme_bw()#(base_size = 12)
+
+    if(!is.null(facet)) {
+      p <- p + facet_wrap(~ get(facet))
+    }
+
+    p
 }
 
 # E1 E2 combined
 
-a <- emmMortalityPlot(e1_e2_mortality, "duration", e1_e2_mortality_emm, "experiment")
+a <- emmMortalityPlot(e1_e2_mortality, "duration", e1_e2_mortality_emm, "experiment", xlab = "Waterlogging duration (weeks)")
 a
 ggsave(filename = "mortality_E1_E2.png", path = figures_dir)
 
 
 # E3
+
+b <- emmMortalityPlot(e3_mortality, "treatment", e3_mort_emm, "genotype")
+b
 
 # ggboxplot(mortalityByPlotE3(e3), "treatment", "mortality", facet.by = "genotype", add = "jitter") +
 #   scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1))
@@ -417,11 +462,12 @@ mortalityBoxplot <- function(data, x, facet = NULL) {
       outliers = FALSE, width = 0.4
     ) +
     geom_jitter(
-      aes(x = get(x), y = mortality), data,
-      width = 0.3, height = 0, alpha = 0.3, size = 2
+      aes(x = get(x), y = mortality, colour = block), data,
+      width = 0.2, height = 0, alpha = 0.5, size = 2
     ) +
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
     labs(x = "Waterlogging treatment", y = "Mortality") +
+    guides(colour = "none") +
     theme_bw()#(base_size = 12)
     
   if(!is.null(facet)) p <- p + facet_wrap(~ get(facet))
@@ -429,7 +475,7 @@ mortalityBoxplot <- function(data, x, facet = NULL) {
   p
 }
 
-b <- mortalityBoxplot(e3_mortality, "treatment", facet = "genotype")
+# b <- mortalityBoxplot(e3_mortality, "treatment", facet = "genotype")
 
 c <- mortalityBoxplot(mortalityByPlot(e4), "treatment")
 
@@ -514,10 +560,10 @@ e1_e2 <- rbind(e1, e2, fill = TRUE)
 
 #' @title Summarise growth data
 #'
-summarise_growth <- function(data, measurement, remove_health = NULL) {
+summarise_growth <- function(data, measurement, trt_var, remove_health = NULL) {
   # Check columns
   if (!all(c(
-    "experiment", "timepoint", "duration", measurement
+    "timepoint", trt_var, measurement
   ) %in% colnames(data))) {
     stop("Input data does not contain required columns.")
   }
@@ -531,13 +577,13 @@ summarise_growth <- function(data, measurement, remove_health = NULL) {
       N = .N,
       sd = sd(get(measurement), na.rm = TRUE)
     ),
-    by = .(experiment, timepoint, duration)
-  ][, duration := factor(duration)]
+    by = c("timepoint", "plot", trt_var)
+  ]#[, get(trt_var) := factor(get(trt_var))]
 }
 
 #' @title Plot growth data
 #'
-plot_growth <- function(data, measurement) {
+plot_growth <- function(data, measurement, treatment) {
   units <- if (measurement == "diameter") {
     "mm"
   } else if (measurement == "height") {
@@ -549,14 +595,18 @@ plot_growth <- function(data, measurement) {
     data,
     x = "timepoint",
     y = "mean",
-    color = "duration"
+    color = "plot",
+    facet.by = treatment
   ) +
     labs(
       title = measurement, #paste(measurement, "by Treatment"),
       x = "Timepoint",
       y = paste0(measurement, " (", units, ")")
-    )
+    ) +
+    guides(colour = "none")
 }
+
+plot_growth(summarise_growth(e2, "height", "duration"), "height", "duration")
 
 ```
 
@@ -780,6 +830,7 @@ pivotGrowth <- function(data, pivot, values = c("diameter", "height")) {
 
 pivot <- block + plot + pot + tree + duration ~ timepoint
 e1_growth <- pivotGrowth(e1, pivot)
+# e1_growth[, diameter_T1c := scale(diameter_T1, center = TRUE, scale = FALSE)]
 
 # b0 <- mean(e1_growth$diameter_T1)
 
@@ -789,14 +840,19 @@ model <- lmer(design, e1_growth)
 # check_model(model) # fine
 # testResiduals(model) # fine
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 emmeans(model, trt.vs.ctrl ~ duration)
 e1_dia_T2_emm <- emmeans(model, ~ duration) |> as.data.table()
+
+# anova(model, update(model, . ~ . + diameter_T1:duration))
+emtrends(model, ~ duration, var = "diameter_T1")
 
 # Total growth
 design <- diameter_T3 ~ diameter_T1 + duration + (1 | block / plot / pot)
 model <- lmer(design, e1_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -812,6 +868,7 @@ e2_growth <- pivotGrowth(e2, pivot)
 design <- diameter_T2 ~ diameter_T1 + duration + (1 | block / plot / pot)
 model <- lmer(design, e2_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -822,6 +879,7 @@ e2_dia_T2_emm <- emmeans(model, ~ duration) |> as.data.table()
 design <- diameter_T3 ~ diameter_T1 + duration + (1 | block / plot / pot)
 model <- lmer(design, e2_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -833,9 +891,10 @@ e2_dia_T3_emm <- emmeans(model, ~ duration) |> as.data.table()
 pivot <- block + plot + pot + genotype + treatment ~ timepoint
 e3_growth <- pivotGrowth(e3, pivot)
 
-design <- diameter_T2 ~ diameter_T1 * genotype + genotype * treatment + (1 | block / genotype / plot)
+design <- diameter_T2 ~ (diameter_T1 + treatment) * genotype + (1 | block / genotype / plot)
 model <- lmer(design, e3_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ treatment | genotype)
@@ -846,15 +905,17 @@ e3_dia_emm <- emmeans(model, ~ treatment | genotype) |> as.data.table()
 # E4
 
 pivot <- pot + block + plot + treatment ~ timepoint
-e4_growth <- pivotGrowth(e4, pivot, values = "diameter")
+e4_growth <- pivotGrowth(e4, pivot, values = c("diameter", "extension_mean"))
 
 # Covariate approach
-design <- T2 ~ T1 + treatment + (1 | block / plot)
+design <- diameter_T2 ~ diameter_T1 + treatment + (1 | block / plot)
 model <- lmer(design, e4_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ treatment)
+e4_dia_emm <- emmeans(model, ~ treatment) |> as.data.table()
 
 ```
 
@@ -866,12 +927,13 @@ height_remove <- c("broken", "top_dead")
 
 # E1
 
-e1_height <- e1_growth[!(tree %in% unique(e1[(health %in% height_remove), tree]))]
+# e1_height <- e1_growth[!(tree %in% unique(e1[(health %in% height_remove), tree]))]
 
 # First year growth
 design <- height_T2 ~ height_T1 + duration + (1 | block / plot / pot)
-model <- lmer(design, e1_height)
+model <- lmer(design, e1_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -880,8 +942,9 @@ e1_height_T2_emm <- emmeans(model, ~ duration) |> as.data.table()
 
 # Total growth
 design <- height_T3 ~ height_T1 + duration + (1 | block / plot / pot)
-model <- lmer(design, e1_height)
+model <- lmer(design, e1_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -890,12 +953,13 @@ e1_height_T3_emm <- emmeans(model, ~ duration) |> as.data.table()
 
 # E2
 
-e2_height <- e2_growth[!(tree %in% unique(e2[(health %in% height_remove), tree]))]
+# e2_height <- e2_growth[!(tree %in% unique(e2[(health %in% height_remove), tree]))]
 
 # First year growth
 design <- height_T2 ~ height_T1 + duration + (1 | block / plot / pot)
-model <- lmer(design, e2_height)
+model <- lmer(design, e2_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -904,8 +968,9 @@ e2_height_T2_emm <- emmeans(model, ~ duration) |> as.data.table()
 
 # Total growth
 design <- height_T3 ~ height_T1 + duration + (1 | block / plot / pot)
-model <- lmer(design, e2_height)
+model <- lmer(design, e2_growth)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ duration)
@@ -920,9 +985,26 @@ e3_height <- e3_growth[!(pot %in% unique(e3[(health %in% height_remove), pot]))]
 design <- height_T2 ~ height_T1 * genotype + genotype * treatment + (1 | block / genotype / plot)
 model <- lmer(design, e3_height)
 summary(model)
+ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ treatment | genotype)
+e3_height_emm <- emmeans(model, ~ treatment | genotype) |> as.data.table()
+
+
+# E4
+# Extension rather than height
+
+e4_ext <- e4[!is.na(extension_mean)]
+
+design <- extension_mean ~ treatment + (1 | block / plot)
+model <- lmer(design, e4_ext)
+summary(model)
+ranova(model)
+anova(model, ddf = "Kenward-Roger", type = 3)
+# check_model(model) # fine
+emmeans(model, trt.vs.ctrl ~ treatment)
+e4_ext_emm <- emmeans(model, ~ treatment) |> as.data.table()
 
 ```
 
@@ -931,13 +1013,16 @@ anova(model, ddf = "Kenward-Roger", type = 3)
 ```{r}
 
 growthByPlot <- function(data, t1, t2, x) {
-  data[, .(T1 = mean(get(t1)), T2 = mean(get(t2))), .(get(x), block, plot)]
+  cols <- c(x, "block", "plot", if ("genotype" %in% colnames(data)) "genotype")
+  data[!is.na(get(t2))][, .(T1 = mean(get(t1)), T2 = mean(get(t2))), cols]
 }
 
-growthByPlot(e1_growth, "diameter_T1", "diameter_T2", "duration")
+# growthByPlot(e1_growth, "diameter_T1", "diameter_T2", "duration")
 
 
-growthSlopePlot <- function(data, type, x, emm, final = "T2", facet = NULL) {
+growthSlopePlot <- function(
+  data, type, x, emm, final = "T2", facet = NULL, xlab = "Waterlogging treatment"
+) {
   T1 <- paste0(type, "_T1")
   T2 <- paste0(type, "_", final)
   dat <- growthByPlot(data, T1, T2, x)
@@ -953,20 +1038,21 @@ growthSlopePlot <- function(data, type, x, emm, final = "T2", facet = NULL) {
 
   emm <- emm %>% mutate(
     dur_idx = as.numeric(get(x)),
+    x       = dur_idx,
     x_T2    = dur_idx + 0.5
   )
 
   p <- ggplot() +
     geom_segment(
       data = dat,
-      aes(x = x_T1, xend = x_T2, y = T1, yend = T2),
-      size = 0.4, alpha = 0.2
+      aes(x = x_T1, xend = x_T2, y = T1, yend = T2, colour = block),
+      size = 0.4, alpha = 0.5#.2
     ) +
-    geom_point(data = dat, aes(x = x_T1, y = T1), alpha = 0.2) +
-    geom_point(data = dat, aes(x = x_T2, y = T2), alpha = 0.2) +
+    geom_point(data = dat, aes(x = x_T1, y = T1, colour = block), alpha = 0.5) +
+    geom_point(data = dat, aes(x = x_T2, y = T2, colour = block), alpha = 0.5) +
     geom_pointrange(
       data = emm,
-      aes(x = x_T2, y = emmean, ymin = lower.CL, ymax = upper.CL),
+      aes(x = x, y = emmean, ymin = lower.CL, ymax = upper.CL),
       size = 0.5
     ) +
     scale_x_continuous(
@@ -975,11 +1061,11 @@ growthSlopePlot <- function(data, type, x, emm, final = "T2", facet = NULL) {
       expand = expansion(mult = c(0.03, 0.08))
     ) +
     labs(
-      x = "Waterlogging duration",
-      y = "Diameter (mm)",
-      # title    = "Baseline-adjusted T2 by treatment (lines show plot-level growth)",
-      # subtitle = paste("EMMs evaluated at diameter_T1 =", round(b0, 1), "mm")
+      x = xlab,
+      y = if(type == "diameter") "Diameter (mm)" else if(type == "height") "Height (cm)"
     ) +
+    # theme(legend.position = "none") +
+    guides(colour = "none") +
     theme_bw()
 
   if (!is.null(facet)) {
@@ -989,27 +1075,74 @@ growthSlopePlot <- function(data, type, x, emm, final = "T2", facet = NULL) {
   p
 }
 
+
+extPlot <- function(data, x, emm) {
+  ggplot() +
+  geom_jitter(
+    data = data[, .(ext = mean(extension_mean)), c(x, "block", "plot")],
+    aes(x = get(x), y = ext, colour = block),
+    width = 0.3, height = 0, alpha = 0.5, size = 2
+  ) +
+  geom_pointrange(
+    data = emm,
+    aes(x = get(x), y = emmean, ymin = lower.CL, ymax = upper.CL),
+    # fatten = 1.8, 
+    size = 0.5
+  ) +
+  labs(x = "Waterlogging treatment", y = "Extension (cm)") +
+  guides(colour = "none") +
+  theme_bw()
+}
+
+
 # Diameter
 # E1
-growthSlopePlot(e1_growth, "diameter", "duration", e1_dia_T2_emm)
-growthSlopePlot(e1_growth, "diameter", "duration", e1_dia_T3_emm, "T3")
+dia_e1_t2_plot <- growthSlopePlot(e1_growth, "diameter", "duration", e1_dia_T2_emm, xlab = "Waterlogging duration (weeks)")
+# ggsave("diameter_slope_E1.png", path = figures_dir)
+dia_e1_t3_plot <- growthSlopePlot(e1_growth, "diameter", "duration", e1_dia_T3_emm, "T3", xlab = "Waterlogging duration (weeks)")
 
 # E2
-growthSlopePlot(e2_growth, "diameter", "duration", e2_dia_T2_emm)
-growthSlopePlot(e2_growth, "diameter", "duration", e2_dia_T3_emm, "T3")
+dia_e2_t2_plot <- growthSlopePlot(e2_growth, "diameter", "duration", e2_dia_T2_emm, xlab = "Waterlogging duration (weeks)")
+dia_e2_t3_plot <- growthSlopePlot(e2_growth, "diameter", "duration", e2_dia_T3_emm, "T3", xlab = "Waterlogging duration (weeks)")
 
 # E3
-growthSlopePlot(e3_growth, "diameter", "treatment", e3_dia_emm, facet = "genotype")
+dia_e3_plot <- growthSlopePlot(e3_growth, "diameter", "treatment", e3_dia_emm, facet = "genotype")
+
+# E4
+dia_e4_plot <- growthSlopePlot(e4_growth, "diameter", "treatment", e4_dia_emm)
 
 
 # Height
 # E1
-growthSlopePlot(e1_height, "height", "duration", e1_height_T2_emm)
-growthSlopePlot(e1_height, "height", "duration", e1_height_T3_emm, "T3")
+height_e1_t2_plot <- growthSlopePlot(e1_growth, "height", "duration", e1_height_T2_emm, xlab = "Waterlogging duration (weeks)")
+height_e1_t3_plot <- growthSlopePlot(e1_growth, "height", "duration", e1_height_T3_emm, "T3", xlab = "Waterlogging duration (weeks)")
 
-#E2
-growthSlopePlot(e2_height, "height", "duration", e2_height_T2_emm)
-growthSlopePlot(e2_height, "height", "duration", e2_height_T3_emm, "T3")
+# E2
+height_e2_t2_plot <- growthSlopePlot(e2_growth, "height", "duration", e2_height_T2_emm, xlab = "Waterlogging duration (weeks)")
+height_e2_t3_plot <- growthSlopePlot(e2_growth, "height", "duration", e2_height_T3_emm, "T3", xlab = "Waterlogging duration (weeks)")
+
+# E3
+height_e3_plot <- growthSlopePlot(e3_growth, "height", "treatment", e3_height_emm, facet = "genotype")
+
+# E4
+height_e4_plot <- extPlot(e4_ext, "treatment", e4_ext_emm)
+
+
+# Combined figures
+ggarrange(
+  ggarrange(dia_e1_t2_plot, dia_e1_t3_plot, labels = c("A", "B")),
+  ggarrange(dia_e2_t2_plot, dia_e2_t3_plot, labels = c("C", "D")),
+  dia_e3_plot, dia_e4_plot, ncol = 1, labels = c("", "", "E", "F")
+)
+ggsave(filename = "diameter.png", path = figures_dir, height = 20, width = 15, units = "cm")
+
+ggarrange(
+  ggarrange(height_e1_t2_plot, height_e1_t3_plot, labels = c("A", "B")),
+  ggarrange(height_e2_t2_plot, height_e2_t3_plot, labels = c("C", "D")),
+  height_e3_plot, height_e4_plot, ncol = 1, labels = c("", "", "E", "F")
+)
+ggsave(filename = "height.png", path = figures_dir, height = 20, width = 15, units = "cm")
+
 
 ```
 
