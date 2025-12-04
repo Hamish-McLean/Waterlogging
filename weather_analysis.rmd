@@ -1,0 +1,109 @@
+---
+title: "Weather analysis"
+author: "Hamish McLean"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+---
+
+## Setup
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(echo = TRUE, error = TRUE) #, message = FALSE, warning = FALSE)
+
+```
+
+```{r load_packages, include = FALSE}
+
+library(data.table)
+library(dplyr)
+library(here)
+library(lubridate)
+library(readxl)
+
+```
+
+```{r constants}
+
+# Set data directory
+data_dir <- here("..", "Data")
+
+```
+
+## Load data
+
+```{r load data}
+
+sheets <- c("winter 22-23 daily", "Winter 23-24 daily", "Summer 24-25 daily")
+data <- lapply(sheets, function(sheet) {
+  setDT(read_excel(file.path(data_dir, "weather data.xlsx"), sheet = sheet))
+}) |> bind_rows()
+
+data[, Date := as.Date(Date)]
+
+```
+
+## Waterlogging treatments
+
+```{r}
+
+treatments <- bind_rows(
+  data.table(
+    experiment = "E1",
+    rep        = 1,
+    treatment  = c("1", "2", "4", "8"),
+    start      = as.Date("2022-12-01"),
+    end        = as.Date(c("2022-12-08", "2022-12-15", "2023-01-02", "2023-01-26"))
+  ),
+  data.table(
+    experiment = "E1",
+    rep        = 2,
+    treatment  = c("1", "2", "4"),
+    start      = as.Date("2024-01-09"),
+    end        = as.Date(c("2024-01-16", "2024-01-23", "2024-02-06"))
+  ),
+  data.table(
+    experiment = "E2",
+    rep        = 1,
+    treatment  = c("1", "2", "4", "8"),
+    start      = as.Date("2023-12-22"),
+    end        = as.Date(c("2023-12-29", "2024-01-05", "2024-01-19", "2024-02-16"))
+  ),
+  data.table(
+    experiment = "E2",
+    rep        = 2,
+    treatment  = c("1", "2", "4", "8"),
+    start      = as.Date("2024-12-03"),
+    end        = as.Date(c("2024-12-09", "2024-12-16", "2024-12-31", "2025-01-28"))
+  ),
+  data.table(
+    experiment = "E3",
+    rep        = 1,
+    treatment  = c("Autumn", "Winter", "Spring"),
+    start      = as.Date(c("2024-10-04", "2024-12-02", "2025-03-31")),
+    end        = as.Date(c("2024-11-07", "2025-01-01", "2025-04-30"))
+  ),
+  data.table(
+    experiment = "E4",
+    rep        = 1,
+    treatment  = c("Winter2", "Winter4", "Winter8", "Spring2", "Spring4", "Spring8"),
+    start      = as.Date(c(rep("2024-12-02", 3), rep("2025-03-31", 3))),
+    end        = as.Date(c("2024-12-16", "2025-01-01", "2025-01-27", "2025-04-14", "2025-04-30", "2025-05-26"))
+  )
+)[, duration := end - start]
+
+```
+
+## Weather analysis
+```{r weather analysis}
+
+result <- data[treatments, on = .(Date >= start, Date <= end), .(
+  avg_min_temp  = mean(`Min Temp (°C)`, na.rm = TRUE),
+  avg_mean_temp = mean(`Mean Temp (°C)`, na.rm = TRUE),
+  avg_max_temp  = mean(`Max Temp (°C)`, na.rm = TRUE),
+  avg_rainfall  = mean(`Total Rainfall (mm)`, na.rm = TRUE),
+  avg_rh        = mean(`Average RH (% RH)`, na.rm = TRUE)
+), by = .EACHI]
+
+cbind(treatments[, -c("start", "end")], result[, -"Date"])
+
+```
