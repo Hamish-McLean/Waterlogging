@@ -35,9 +35,12 @@ library(glmmTMB)
 library(here)
 library(lme4)
 library(lmerTest)
+library(MASS)
 library(performance)
 library(readxl)
 library(scales)
+library(statmod)
+library(tweedie)
 
 ```
 
@@ -100,6 +103,7 @@ model <- glm(
 
 summary(model)
 anova(update(model, . ~ block), model, test = "Chisq")
+Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 
 
@@ -162,6 +166,8 @@ anova(update(model, . ~ . - experiment - experiment:duration), model, test = "Ch
 anova(update(model, . ~ . - duration - experiment:duration), model, test = "Chisq") # Duration
 anova(update(model, . ~ . - experiment:duration), model, test = "Chisq") # Interaction
 
+# Anova(model, type = 3)
+
 emmeans(model, trt.vs.ctrl ~ duration | experiment, type = "response")
 
 emm <- emmeans(model, ~ duration | experiment, type = "response") |> as.data.frame()
@@ -190,11 +196,11 @@ e3_mortality <- mortalityByPlotE3(e3)
 
 design <- cbind(dead, total - dead) ~ genotype * treatment + (1 | block / genotype)
 
-model <- glmer(design, data = e3_mortality, family = binomial(link = "logit"))
-# check_model(model) # bad
-testResiduals(model)
-testDispersion(model)
-summary(model)
+# model <- glmer(design, data = e3_mortality, family = binomial(link = "logit"))
+# # check_model(model) # bad
+# testResiduals(model)
+# testDispersion(model)
+# summary(model)
 
 
 # model <- glmmTMB(design, ziformula = ~ 0 + treatment, data = e3_mortality, family = betabinomial(link = "logit"))
@@ -229,6 +235,7 @@ model <- glm(
 )
 check_model(model) # Reasonable
 
+Anova(model, type = 3)
 anova(update(model, . ~ block), model, test = "Chisq")
 emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
 e3_mort_MM106_emm <- emmeans(model, ~ treatment, type = "response") |> as.data.frame()
@@ -239,6 +246,7 @@ model <- glm(
 )
 check_model(model) # Reasonable
 
+Anova(model, type = 3)
 anova(update(model, . ~ block), model, test = "Chisq")
 emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
 e3_mort_M9_emm <- emmeans(model, ~ treatment, type = "response") |> as.data.frame()
@@ -410,13 +418,12 @@ mortalityPlot(e1)
 
 
 # emmeans error plot
-
 emmMortalityPlot <- function(data, x, emm, facet = NULL, xlab = "Waterlogging treatment") {
   p <- ggplot() +
     geom_jitter(
       data = data,
-      aes(x = get(x), y = mortality, colour = block),
-      width = 0.2, height = 0, alpha = 0.5, size = 2
+      aes(x = get(x), y = mortality),# colour = block),
+      width = 0.2, height = 0, alpha = 0.4, size = 2
     ) +
     geom_pointrange(
       data = emm,
@@ -424,16 +431,11 @@ emmMortalityPlot <- function(data, x, emm, facet = NULL, xlab = "Waterlogging tr
       fatten = 1.8, size = 1
     ) +
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
-    labs(
-      x = xlab, y = "Mortality",
-      # caption = "Points: plot-level proportions; bars: model-adjusted estimates (emmeans)"
-    ) +
+    labs(x = xlab, y = "Mortality") +
     guides(colour = "none") +
     theme_bw()#(base_size = 12)
 
-    if(!is.null(facet)) {
-      p <- p + facet_wrap(~ get(facet))
-    }
+    if(!is.null(facet)) p <- p + facet_wrap(~ get(facet))
 
     p
 }
@@ -462,8 +464,9 @@ mortalityBoxplot <- function(data, x, facet = NULL) {
       outliers = FALSE, width = 0.4
     ) +
     geom_jitter(
-      aes(x = get(x), y = mortality, colour = block), data,
-      width = 0.2, height = 0, alpha = 0.5, size = 2
+      data = data,
+      aes(x = get(x), y = mortality),# colour = block),
+      width = 0.2, height = 0, alpha = 0.4, size = 2
     ) +
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
     labs(x = "Waterlogging treatment", y = "Mortality") +
@@ -1705,11 +1708,92 @@ plot(emm_e4_leaf_scar_canker)
 
 ```{r}
 
-e1_canker <- e1[
-  !is.na(inoc_cankers) & timepoint == "T2",
-  .(cankers = sum(inoc_cankers), inoc = sum(inoc_points)),
-  by = .(plot, block, duration)
-]
+cankerSummary <- function(data) {
+  cols <- colnames(data)
+  id_cols <- intersect(cols, c("block", "plot", "tree", "treatment", "duration"))
+  inoc_cols <- intersect(cols, c("inoc_points", "rasp_inoculations", "leaf_scar_inoculations"))
+  canker_cols <- intersect(cols, c("cankers", "inoc_cankers",  "rasp_cankers", "leaf_scar_cankers"))
+  long <- melt(
+    data,
+    id.vars = c(id_cols, "timepoint"),
+    measure.vars = canker_cols,
+    variable.name = "canker_type",
+    value.name = "count"
+  )
+  wide <- dcast(
+    long,
+    formula = paste(paste(id_cols, collapse = " + "), "~ canker_type + timepoint"),
+    value.var = "count"
+  )
+  wide
+  select_cols <- c(id_cols, inoc_cols)
+  d <- data[timepoint == "T2", ..select_cols]
+  d <- d[complete.cases(d[, ..inoc_cols])]
+  result <- merge(d, wide, by = id_cols, all.x = TRUE)
+  # Remove columns with all NA values
+  # result <- result[, which(!sapply(.SD, function(x) all(is.na(x)))), .SDcols = names(result), with = FALSE]
+  cols_to_keep <- names(result)[!sapply(result, function(x) all(is.na(x)))]
+  result <- result[, ..cols_to_keep]
+  canker_cols_wide <- grep("inoc|cankers", names(result), value = TRUE)
+  id_cols_wide <- id_cols[id_cols != "tree"]
+  # Summarise per plot
+  result[, c(lapply(.SD, sum, na.rm = TRUE), .(n_trees = .N)), by = id_cols_wide, .SDcols = canker_cols_wide]
+}
+
+e1_canker <- cankerSummary(e1)
+e2_canker <- cankerSummary(e2)
+
+e1_canker[, cankers_T2_per_tree := cankers_T2 / n_trees]
+e1_canker[, cankers_T3_per_tree := cankers_T3 / n_trees]
+
+# E1 canker counts T2
+# design <- (cankers_T2 / n_trees) ~ block + duration
+# design <- cankers_T2_per_tree + 0.001 ~ block + duration
+design <- cankers_T2_per_tree ~ block + duration
+
+# model <- glm(design, data = e1_canker, family = tweedie(var.power = 1.5, link.power = 0))
+model <- glmmTMB(design, data = e1_canker, family = glmmTMB::tweedie(link = "log"))
+# model <- glm(design, data = e1_canker, family = Gamma(link = "log"))
+# # model <- glm.nb(design, data = e1_canker)
+# model <- glmmTMB(design, data = e1_canker, ziformula = ~1, family = gaussian(link = "log"))
+
+# check_model(model) # reasonable
+# testResiduals(model) # mild overdispersion
+
+# anova(update(model, . ~ block), model, test = "Chisq")
+Anova(model, type = 3)
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+e1_canker_t2_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+
+# E1 canker counts T3
+# design <- cankers_T3_per_tree + 0.001 ~ block + duration
+design <- cankers_T3_per_tree ~ block + duration
+
+# model <- glm(design, data = e1_canker, family = tweedie(var.power = 1.5, link.power = 0))
+model <- glmmTMB(design, data = e1_canker, family = glmmTMB::tweedie(link = "log"))
+# model <- glm(design, data = e1_canker, family = Gamma(link = "log"))
+# model <- glm.nb(design, data = e1_canker)
+
+# check_model(model) # reasonable
+# testResiduals(model) #
+
+# anova(update(model, . ~ block), model, test = "Chisq")
+Anova(model, type = 3)
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+e1_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+
+
+
+
+
+
+
+
+# e1_canker <- e1[
+#   !is.na(inoc_cankers) & timepoint == "T2",
+#   .(cankers = sum(inoc_cankers), inoc = sum(inoc_points)),
+#   by = .(plot, block, duration, timepoint)
+# ]
 
 # Model
 design <- cbind(cankers, inoc - cankers) ~ block + duration
@@ -1735,16 +1819,16 @@ e1_canker_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response
 
 ```{r}
 
-# E2 rasp
-e2_rasp_canker <- e2[
-  !is.na(rasp_cankers) & !is.na(rasp_inoculations) & timepoint == "T2",
-  .(cankers = sum(rasp_cankers), inoc = sum(rasp_inoculations)),
-  by = .(plot, block, duration)
-]
+# E2 rasp T2
+# e2_rasp_canker <- e2[
+#   !is.na(rasp_cankers) & !is.na(rasp_inoculations) & timepoint == "T2",
+#   .(cankers = sum(rasp_cankers), inoc = sum(rasp_inoculations)),
+#   by = .(plot, block, duration)
+# ]
 
 # Model
-design <- cbind(cankers, inoc - cankers) ~ block + duration
-model <- glm(design, data = e2_rasp_canker, family = binomial(link = "logit"), method = brglmFit)
+design <- cbind(rasp_cankers_T2, rasp_inoculations - rasp_cankers_T2) ~ block + duration
+model <- glm(design, data = e2_canker, family = binomial(link = "logit"), method = brglmFit)
 
 # check_model(model) # resonable
 # sim <- simulate_residuals(model)
@@ -1752,8 +1836,8 @@ model <- glm(design, data = e2_rasp_canker, family = binomial(link = "logit"), m
 # testZeroInflation(sim)
 
 # betabinomial
-design <- cbind(cankers, inoc - cankers) ~ block + duration
-model <- glmmTMB(design, data = e2_rasp_canker, family = betabinomial(link = "logit"))
+design <- cbind(rasp_cankers_T2, rasp_inoculations - rasp_cankers_T2) ~ block + duration
+model <- glmmTMB(design, data = e2_canker, family = betabinomial(link = "logit"))
 
 # check_model(model) #
 # sim <- simulate_residuals(model)
@@ -1765,14 +1849,50 @@ anova(update(model, . ~ block), model, test = "Chisq")
 Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 
-e2_canker_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+e2_rasp_canker_t2_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
 
 
-# E2 leaf scar
-e2_ls_canker <- e2[!is.na(leaf_scar_cankers) & !is.na(leaf_scar_inoculations) & timepoint == "T2"][,
-  .(ls_cankers = sum(leaf_scar_cankers), ls_inoc = sum(leaf_scar_inoculations)),
-  by = .(plot, block, duration)
-]
+# E2 rasp T3
+
+design <- cbind(rasp_cankers_T3, rasp_inoculations - rasp_cankers_T3) ~ block + duration
+# model <- glm(design, data = e2_canker, family = binomial(link = "logit"))#, method = brglmFit)
+
+# check_model(model) # fine
+# testResiduals(model) # a bit overdispersed
+
+model <- glmmTMB(design, data = e2_canker, family = betabinomial(link = "logit"))
+
+# check_model(model) # fine
+# testResiduals(model) # fine
+
+Anova(model, type = 3)
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+
+e2_rasp_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+
+# E2 leaf scar T2
+
+# e2_ls_canker <- e2[!is.na(leaf_scar_cankers) & !is.na(leaf_scar_inoculations) & timepoint == "T2"][,
+#   .(ls_cankers = sum(leaf_scar_cankers), ls_inoc = sum(leaf_scar_inoculations)),
+#   by = .(plot, block, duration)
+# ]
+
+
+# E2 leaf scar T3
+
+design <- cbind(leaf_scar_cankers_T3, leaf_scar_inoculations - leaf_scar_cankers_T3) ~ block + duration
+model <- glm(design, data = e2_canker, family = binomial(link = "logit"))#, method = brglmFit)
+
+# check_model(model) # good
+# testResiduals(model) # good
+
+Anova(model, type = 3)
+# anova(update(model, . ~ block), model, test = "Chisq")
+
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+
+e2_ls_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+
 
 ```
 
@@ -1798,11 +1918,12 @@ model <- glmer(design, data = e3_rasp_canker, family = binomial(link = "logit"))
 
 # Results
 summary(model)
+Anova(model, type = 3)
 anova(update(model, . ~ . - treatment - genotype:treatment), model, test = "Chisq")
 anova(update(model, . ~ . - genotype:treatment), model, test = "Chisq")
 
 
-# E3 rasp wounds
+# E3 leaf scars
 e3_ls_canker <- e3[
   !is.na(leaf_scar_cankers) & !is.na(leaf_scar_inoculations) & timepoint == "T2",
   .(cankers = sum(leaf_scar_cankers), inoc = sum(leaf_scar_inoculations)),
@@ -1841,6 +1962,7 @@ model <- glmer(design, data = e3_canker, family = binomial(link = "logit"), cont
 
 # Results
 summary(model)
+Anova(model, type = 3)
 
 # Effect of treatment
 anova(update(model, . ~ . - treatment - genotype:treatment - type:treatment), model, test = "Chisq")
@@ -1855,7 +1977,6 @@ emmeans(model, pairwise ~ genotype, type = "response")
 # Effect of type
 anova(update(model, . ~ . - type - type:treatment), model, test = "Chisq")
 emmeans(model, revpairwise ~ type, type = "response")
-
 
 
 e3_canker_emm <- setDT(as.data.frame(emmeans(model, ~ treatment | c(type, genotype), type = "response")))
@@ -1883,6 +2004,8 @@ model <- glm(design, data = e4_rasp_canker, family = binomial(link = "logit"), m
 
 # Results
 summary(model)
+Anova(model, type = 3)
+
 anova(update(model, . ~ block), model, test = "Chisq")
 emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
 
@@ -1905,6 +2028,9 @@ model <- glm(design, data = e4_ls_canker, family = binomial(link = "logit"), met
 
 # Results
 summary(model)
+Anova(model, type = 3)
+
+
 anova(update(model, . ~ block), model, test = "Chisq")
 emmeans(model, trt.vs.ctrl ~ treatment, type = "response")
 
@@ -1926,6 +2052,8 @@ model <- glmer(design, data = e4_canker, family = binomial(link = "logit"))#, co
 
 # Results
 summary(model)
+Anova(model, type = 3)
+
 anova(update(model, . ~ . - treatment - type:treatment), model, test = "Chisq")
 anova(update(model, . ~ . - type:treatment), model, test = "Chisq")
 emmeans(model, trt.vs.ctrl ~ treatment | type, type = "response")
@@ -1942,6 +2070,68 @@ e4_canker_emm <- setDT(as.data.frame(emmeans(model, ~ treatment | type, type = "
 
 ```{r}
 
+emmCankerCountPlot <- function(data, x, y, emm, facet = NULL) {
+  p <- ggplot() +
+    geom_jitter(
+      data = data,
+      aes(x = get(x), y = get(y)),# colour = Treatments),
+      width = 0.2, height = 0, alpha = 0.2, size = 2
+    ) +
+    geom_pointrange(
+      data = emm,
+      aes(x = get(x), y = response, ymin = asymp.LCL, ymax = asymp.UCL),# colour = Treatments),
+      fatten = 1.8, size = 1
+    ) +
+    labs(x = "Waterlogging duration (weeks)", y = "Cankers per tree") +
+    theme_bw()
+  if (!is.null(facet)) p <- p + facet_wrap(facet)
+  p
+}
+# emmCankerCountPlot(e1_canker, "duration", "cankers_T2_per_tree", e1_canker_t2_emm)
+# emmCankerCountPlot(e1_canker, "duration", "cankers_T3_per_tree", e1_canker_t3_emm)
+
+e1_canker_per_tree <- melt(
+  e1_canker, id.vars = c("block", "plot", "duration"), 
+  measure.vars = c("cankers_T2_per_tree", "cankers_T3_per_tree"),
+  variable.name = "Treatments", value.name = "cankers_per_tree"
+)
+e1_canker_per_tree[, Treatments := fcase(
+  Treatments == "cankers_T2_per_tree", "single",
+  Treatments == "cankers_T3_per_tree", "repeat"
+)][, Treatments := factor(Treatments, levels = c("single", "repeat"))]
+e1_canker_emm <- bind_rows(
+  "single" = e1_canker_t2_emm, "repeat" = e1_canker_t3_emm, .id = "Treatments"
+)[, Treatments := factor(Treatments, levels = c("single", "repeat"))]
+
+e1_canker_plot <- emmCankerCountPlot(e1_canker_per_tree, "duration", "cankers_per_tree", e1_canker_emm, "Treatments")
+
+
+emmCankerPlotColour <- function(data, x, emm, xlab, facet = NULL) {
+  p <- ggplot() +
+    geom_jitter(
+      data = data,
+      aes(x = get(x), y = cankers / inoc),
+      width = 0.2, height = 0, alpha = 0.2, size = 2
+    ) +
+    geom_pointrange(
+      data = emm,
+      aes(x = get(x), y = prob, ymin = asymp.LCL, ymax = asymp.UCL),
+      fatten = 1.8, size = 1
+    ) +
+    scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
+    labs(x = xlab, y = "Canker incidence") +
+    theme_bw()
+
+  if (!is.null(facet)) {
+    if (length(facet) == 1) p <- p + facet_wrap(as.formula(paste("~", facet)))
+    else p <- p + facet_grid(facet)
+  }
+  
+  p
+}
+
+
+
 emmCankerPlot <- function(data, x, emm, xlab, facet = NULL) {
   p <- ggplot() +
     geom_jitter(
@@ -1954,35 +2144,78 @@ emmCankerPlot <- function(data, x, emm, xlab, facet = NULL) {
       aes(x = get(x), y = prob, ymin = asymp.LCL, ymax = asymp.UCL),
       fatten = 1.8, size = 1
     ) +
-    # facet_wrap(~ get(facet)) +
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
-    labs(
-      x = xlab, y = "Canker expression",
-      # caption = "Points: plot-level proportions; bars: model-adjusted estimates (emmeans)"
-    ) +
-    theme_bw()#base_size = 12)
+    labs(x = xlab, y = "Canker incidence") +
+    theme_bw()
 
-  if(!is.null(facet)) {
-    if(length(facet) == 1) p <- p + facet_wrap(as.formula(paste("~", facet)))
+  if (!is.null(facet)) {
+    if (length(facet) == 1) p <- p + facet_wrap(as.formula(paste("~", facet)))
     else p <- p + facet_grid(facet)
   }
   
   p
 }
 
-a <- emmCankerPlot(e1_canker, "duration", e1_canker_emm, "Waterlogging duration (weeks)") +
-  theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
-b <- emmCankerPlot(e2_rasp_canker, "duration", e2_canker_emm, "Waterlogging duration (weeks)") +
-  theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
+e2_canker_long <- melt(
+  e2_canker, id.vars = c("block", "plot", "duration"),
+  measure.vars = c("rasp_cankers_T2", "rasp_cankers_T3", "leaf_scar_cankers_T2", "leaf_scar_cankers_T3"),
+  variable.name = "src", value.name = "cankers"
+)
+e2_canker_long[, c("wound_raw", "tp") := tstrsplit(src, "_cankers_", fixed = TRUE)]
+e2_canker_long[, wound := fcase(
+  wound_raw == "rasp", "Rasp",
+  wound_raw == "leaf_scar", "Leaf scar"
+)]
+e2_canker_long[, Treatments := fcase(
+  tp == "T2", "single",
+  tp == "T3", "repeat"
+)][, Treatments := factor(Treatments, levels = c("single", "repeat"))]
+e2_canker_long[, c("src", "wound_raw", "tp") := NULL]
+
+inoc <- melt(
+  e2_canker, id.vars = c("block", "plot", "duration"),
+  measure.vars = c("rasp_inoculations", "leaf_scar_inoculations"),
+  variable.name = "src", value.name = "inoc"
+)[, wound := fcase(
+  src == "rasp_inoculations", "Rasp",
+  src == "leaf_scar_inoculations", "Leaf scar"
+)][, src := NULL]
+
+e2_canker_long <- merge(
+  e2_canker_long, inoc,
+  by = c("block", "plot", "duration", "wound"),
+  all.x = TRUE
+)
+
+e2_canker_emm <- bind_rows(
+  e2_rasp_canker_t2_emm[, `:=`(Treatments = "single", wound = "Rasp")],
+  e2_rasp_canker_t3_emm[, `:=`(Treatments = "repeat", wound = "Rasp")],
+  e2_ls_canker_t3_emm[, `:=`(Treatments = "repeat", wound = "Leaf scar")],
+  data.table(
+    duration = c("0", "1", "2", "4", "8"), 
+    prob = NA, SE = NA, df = NA, "asymp.LCL" = NA, "asymp.UCL" = NA,
+    Treatments = "single", wound = "Leaf scar"
+  )
+)[, Treatments := factor(Treatments, levels = c("single", "repeat"))]
+
+e2_canker_plot <- emmCankerPlot(e2_canker_long, "duration", e2_canker_emm, "Waterlogging duration (weeks)", facet = c("wound", "Treatments"))
+
+
+
+
+# a <- emmCankerPlot(e1_canker, "duration", e1_canker_emm, "Waterlogging duration (weeks)") +
+#   theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
+# b <- emmCankerPlot(e2_rasp_canker, "duration", e2_canker_emm, "Waterlogging duration (weeks)") +
+#   theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
 c <- emmCankerPlot(e3_canker, "treatment", e3_canker_emm, "Waterlogging treatment", facet = c("genotype", "type"))
 d <- emmCankerPlot(e4_canker, "treatment", e4_canker_emm, "Waterlogging treatment", facet = "type") +
   theme(axis.text.x = element_text(angle = 20, hjust = 1))
 
+
 ggarrange(
-  ggarrange(a, b, labels = c("A", "B"), vjust = 0.9),
-  c, d,
-  labels = c("", "C", "D"), vjust = 0.8,
-  nrow = 3, ncol = 1, heights = c(1, 2, 1)#, align = "hv"
+  e1_canker_plot, e2_canker_plot, c, d,
+  labels = c("A", "B", "C", "D"), vjust = 0.8,
+  nrow = 4, ncol = 1, heights = c(1, 2, 2, 1)#, align = "hv"
 )
 ggsave(filename = "canker_combined.png", path = figures_dir, width = 14, height = 20, units = "cm")
 
