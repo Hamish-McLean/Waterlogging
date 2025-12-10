@@ -53,8 +53,11 @@ figures_dir <- here("figures")
 
 latte <- list(
   red    = "#d20f39",
+  maroon = "#e64553",
   yellow = "#df8e1d",
   green  = "#40a02b",
+  sky    = "#04a5e5",
+  blue   = "#1e66f5",
   text   = "#4c4f69"
 )
 
@@ -901,6 +904,7 @@ ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ treatment | genotype)
+emmeans(model, revpairwise ~ genotype, type = "response")
 e3_dia_emm <- emmeans(model, ~ treatment | genotype) |> as.data.table()
 
 
@@ -992,6 +996,7 @@ ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ treatment | genotype)
+# emmeans(model, revpairwise ~ genotype, type = "response")
 e3_height_emm <- emmeans(model, ~ treatment | genotype) |> as.data.table()
 
 
@@ -1048,11 +1053,11 @@ growthSlopePlot <- function(
   p <- ggplot() +
     geom_segment(
       data = dat,
-      aes(x = x_T1, xend = x_T2, y = T1, yend = T2, colour = block),
-      size = 0.4, alpha = 0.5#.2
+      aes(x = x_T1, xend = x_T2, y = T1, yend = T2),# colour = block),
+      size = 0.4, alpha = 0.2
     ) +
-    geom_point(data = dat, aes(x = x_T1, y = T1, colour = block), alpha = 0.5) +
-    geom_point(data = dat, aes(x = x_T2, y = T2, colour = block), alpha = 0.5) +
+    geom_point(data = dat, aes(x = x_T1, y = T1), alpha = 0.2) +
+    geom_point(data = dat, aes(x = x_T2, y = T2), alpha = 0.2) +
     geom_pointrange(
       data = emm,
       aes(x = x, y = emmean, ymin = lower.CL, ymax = upper.CL),
@@ -1083,8 +1088,8 @@ extPlot <- function(data, x, emm) {
   ggplot() +
   geom_jitter(
     data = data[, .(ext = mean(extension_mean)), c(x, "block", "plot")],
-    aes(x = get(x), y = ext, colour = block),
-    width = 0.3, height = 0, alpha = 0.5, size = 2
+    aes(x = get(x), y = ext),# colour = block),
+    width = 0.3, height = 0, alpha = 0.2, size = 2
   ) +
   geom_pointrange(
     data = emm,
@@ -1746,7 +1751,37 @@ e2_canker <- cankerSummary(e2)
 e1_canker[, cankers_T2_per_tree := cankers_T2 / n_trees]
 e1_canker[, cankers_T3_per_tree := cankers_T3 / n_trees]
 
+# GLM with offset
+# Poisson overdispersed so use negative binomial instead
 # E1 canker counts T2
+design <- cankers_T2 ~ block + duration + offset(log(n_trees))
+model <- glm.nb(design, data = e1_canker)
+
+# summary(model)
+# check_model(model) # good
+# testResiduals(model) # good
+
+Anova(model, type = 3)
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+e1_canker_t2_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+
+# T3
+design <- cankers_T3 ~ block + duration + offset(log(n_trees))
+model <- glm.nb(design, data = e1_canker)
+
+# summary(model)
+# check_model(model) # good
+# testResiduals(model) # good
+
+Anova(model, type = 3)
+emmeans(model, trt.vs.ctrl ~ duration, type = "response")
+e1_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+
+
+
+
+
+# Tweedie
 # design <- (cankers_T2 / n_trees) ~ block + duration
 # design <- cankers_T2_per_tree + 0.001 ~ block + duration
 design <- cankers_T2_per_tree ~ block + duration
@@ -1787,7 +1822,7 @@ e1_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "respo
 
 
 
-
+# Inoculation points incidence
 
 # e1_canker <- e1[
 #   !is.na(inoc_cankers) & timepoint == "T2",
@@ -1827,22 +1862,12 @@ e1_canker_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response
 # ]
 
 # Model
-design <- cbind(rasp_cankers_T2, rasp_inoculations - rasp_cankers_T2) ~ block + duration
-model <- glm(design, data = e2_canker, family = binomial(link = "logit"), method = brglmFit)
-
-# check_model(model) # resonable
-# sim <- simulate_residuals(model)
-# testResiduals(sim) # significant dispersion
-# testZeroInflation(sim)
-
-# betabinomial
+# Binomial overdispersed so use betabinomial
 design <- cbind(rasp_cankers_T2, rasp_inoculations - rasp_cankers_T2) ~ block + duration
 model <- glmmTMB(design, data = e2_canker, family = betabinomial(link = "logit"))
 
-# check_model(model) #
-# sim <- simulate_residuals(model)
+# check_model(model) # fine
 # testResiduals(sim) # good
-# testZeroInflation(sim) # good
 
 # Results
 anova(update(model, . ~ block), model, test = "Chisq")
@@ -1853,13 +1878,7 @@ e2_rasp_canker_t2_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "
 
 
 # E2 rasp T3
-
 design <- cbind(rasp_cankers_T3, rasp_inoculations - rasp_cankers_T3) ~ block + duration
-# model <- glm(design, data = e2_canker, family = binomial(link = "logit"))#, method = brglmFit)
-
-# check_model(model) # fine
-# testResiduals(model) # a bit overdispersed
-
 model <- glmmTMB(design, data = e2_canker, family = betabinomial(link = "logit"))
 
 # check_model(model) # fine
@@ -1888,7 +1907,6 @@ model <- glm(design, data = e2_canker, family = binomial(link = "logit"))#, meth
 
 Anova(model, type = 3)
 # anova(update(model, . ~ block), model, test = "Chisq")
-
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 
 e2_ls_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
@@ -2075,61 +2093,65 @@ emmCankerCountPlot <- function(data, x, y, emm, facet = NULL) {
     geom_jitter(
       data = data,
       aes(x = get(x), y = get(y)),# colour = Treatments),
-      width = 0.2, height = 0, alpha = 0.2, size = 2
+      # position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6),
+      width = 0.2, height = 0,
+      alpha = 0.2, size = 2
     ) +
     geom_pointrange(
       data = emm,
       aes(x = get(x), y = response, ymin = asymp.LCL, ymax = asymp.UCL),# colour = Treatments),
+      position = position_dodge(width = 0.6),
       fatten = 1.8, size = 1
     ) +
-    labs(x = "Waterlogging duration (weeks)", y = "Cankers per tree") +
+    labs(x = "Waterlogging duration (weeks)", y = "Total cankers") +
     theme_bw()
   if (!is.null(facet)) p <- p + facet_wrap(facet)
   p
 }
+# emmCankerCountPlot(e1_canker_per_tree, "duration", "cankers_per_tree", e1_canker_emm, facet = "Treatments")
 # emmCankerCountPlot(e1_canker, "duration", "cankers_T2_per_tree", e1_canker_t2_emm)
 # emmCankerCountPlot(e1_canker, "duration", "cankers_T3_per_tree", e1_canker_t3_emm)
 
-e1_canker_per_tree <- melt(
-  e1_canker, id.vars = c("block", "plot", "duration"), 
-  measure.vars = c("cankers_T2_per_tree", "cankers_T3_per_tree"),
-  variable.name = "Treatments", value.name = "cankers_per_tree"
+e1_canker_long <- melt(
+  e1_canker, id.vars = c("block", "plot", "duration"),
+  measure.vars = c("cankers_T2", "cankers_T3"),
+  variable.name = "Treatments", value.name = "cankers"
 )
-e1_canker_per_tree[, Treatments := fcase(
-  Treatments == "cankers_T2_per_tree", "single",
-  Treatments == "cankers_T3_per_tree", "repeat"
+e1_canker_long[, Treatments := fcase(
+  Treatments == "cankers_T2", "single",
+  Treatments == "cankers_T3", "repeat"
 )][, Treatments := factor(Treatments, levels = c("single", "repeat"))]
 e1_canker_emm <- bind_rows(
   "single" = e1_canker_t2_emm, "repeat" = e1_canker_t3_emm, .id = "Treatments"
 )[, Treatments := factor(Treatments, levels = c("single", "repeat"))]
 
-e1_canker_plot <- emmCankerCountPlot(e1_canker_per_tree, "duration", "cankers_per_tree", e1_canker_emm, "Treatments")
+e1_canker_plot <- emmCankerCountPlot(e1_canker_long, "duration", "cankers", e1_canker_emm, "Treatments")
 
 
-emmCankerPlotColour <- function(data, x, emm, xlab, facet = NULL) {
+emmCankerPlotColour <- function(data, x, emm, xlab, colour, facet = NULL) {
   p <- ggplot() +
     geom_jitter(
       data = data,
-      aes(x = get(x), y = cankers / inoc),
-      width = 0.2, height = 0, alpha = 0.2, size = 2
+      aes(x = get(x), y = cankers / inoc, colour = get(colour)),
+      position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.6),
+      alpha = 0.2, size = 2
     ) +
     geom_pointrange(
       data = emm,
-      aes(x = get(x), y = prob, ymin = asymp.LCL, ymax = asymp.UCL),
+      aes(x = get(x), y = prob, ymin = asymp.LCL, ymax = asymp.UCL, colour = get(colour)),
+      position = position_dodge(width = 0.6),
       fatten = 1.8, size = 1
     ) +
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
     labs(x = xlab, y = "Canker incidence") +
     theme_bw()
-
   if (!is.null(facet)) {
     if (length(facet) == 1) p <- p + facet_wrap(as.formula(paste("~", facet)))
     else p <- p + facet_grid(facet)
   }
-  
   p
 }
-
+# emmCankerPlotColour(e2_canker_long, "duration", e2_canker_emm, "Waterlogging duration (weeks)", "Treatments", facet = "wound")
 
 
 emmCankerPlot <- function(data, x, emm, xlab, facet = NULL) {
@@ -2192,7 +2214,7 @@ e2_canker_emm <- bind_rows(
   e2_rasp_canker_t3_emm[, `:=`(Treatments = "repeat", wound = "Rasp")],
   e2_ls_canker_t3_emm[, `:=`(Treatments = "repeat", wound = "Leaf scar")],
   data.table(
-    duration = c("0", "1", "2", "4", "8"), 
+    duration = c("0", "1", "2", "4", "8"),
     prob = NA, SE = NA, df = NA, "asymp.LCL" = NA, "asymp.UCL" = NA,
     Treatments = "single", wound = "Leaf scar"
   )
@@ -2200,6 +2222,16 @@ e2_canker_emm <- bind_rows(
 
 e2_canker_plot <- emmCankerPlot(e2_canker_long, "duration", e2_canker_emm, "Waterlogging duration (weeks)", facet = c("wound", "Treatments"))
 
+ggarrange(e1_canker_plot, e2_canker_plot, labels = c("A", "B"), ncol = 1, heights = c(1, 2))
+ggsave(filename = "canker_E1_E2.png", path = figures_dir, width = 14, height = 16, units = "cm")
+
+
+e3_canker_plot <- emmCankerPlot(e3_canker, "treatment", e3_canker_emm, "Waterlogging treatment", facet = c("genotype", "type"))
+e4_canker_plot <- emmCankerPlot(e4_canker, "treatment", e4_canker_emm, "Waterlogging treatment", facet = "type") +
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+ggarrange(e3_canker_plot, e4_canker_plot, labels = c("A", "B"), ncol = 1, heights = c(2, 1))
+ggsave(filename = "canker_E3_E4.png", path = figures_dir, width = 14, height = 16, units = "cm")
 
 
 
@@ -2207,16 +2239,15 @@ e2_canker_plot <- emmCankerPlot(e2_canker_long, "duration", e2_canker_emm, "Wate
 #   theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
 # b <- emmCankerPlot(e2_rasp_canker, "duration", e2_canker_emm, "Waterlogging duration (weeks)") +
 #   theme(plot.margin = margin(t = 10, r = 5, b = 5, l = 5, unit = "pt"))
-c <- emmCankerPlot(e3_canker, "treatment", e3_canker_emm, "Waterlogging treatment", facet = c("genotype", "type"))
-d <- emmCankerPlot(e4_canker, "treatment", e4_canker_emm, "Waterlogging treatment", facet = "type") +
-  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+# c <- emmCankerPlot(e3_canker, "treatment", e3_canker_emm, "Waterlogging treatment", facet = c("genotype", "type"))
+# d <- emmCankerPlot(e4_canker, "treatment", e4_canker_emm, "Waterlogging treatment", facet = "type") +
+#   theme(axis.text.x = element_text(angle = 20, hjust = 1))
 
-
-ggarrange(
-  e1_canker_plot, e2_canker_plot, c, d,
-  labels = c("A", "B", "C", "D"), vjust = 0.8,
-  nrow = 4, ncol = 1, heights = c(1, 2, 2, 1)#, align = "hv"
-)
-ggsave(filename = "canker_combined.png", path = figures_dir, width = 14, height = 20, units = "cm")
+# ggarrange(
+#   e1_canker_plot, e2_canker_plot, c, d,
+#   labels = c("A", "B", "C", "D"), vjust = 0.8,
+#   nrow = 4, ncol = 1, heights = c(1, 2, 2, 1)#, align = "hv"
+# )
+# ggsave(filename = "canker_combined.png", path = figures_dir, width = 14, height = 20, units = "cm")
 
 ```

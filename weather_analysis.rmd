@@ -104,6 +104,6 @@ result <- data[treatments, on = .(Date >= start, Date <= end), .(
   avg_rh        = mean(`Average RH (% RH)`, na.rm = TRUE)
 ), by = .EACHI]
 
-cbind(treatments[, -c("start", "end")], result[, -"Date"])
+cbind(treatments, result[, -"Date"])
 
 ```
