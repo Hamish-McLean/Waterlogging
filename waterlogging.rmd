@@ -76,7 +76,7 @@ e4 <- readRDS(here(object_dir, "e4.Rds"))
 
 ## Tree mortality
 
-Count of dead ond 'healthy' (not dead) trees summarised per plot (or per subplot
+Count of dead and 'healthy' (not dead) trees summarised per plot (or per subplot
 for experiment 3).
 
 Binomial GLM fit to mortality matrix with Firth-type bias reduction.
@@ -95,7 +95,7 @@ mortalityByPlot <- function(data, timepoint = "T2") {
 
 model <- glm(
   cbind(dead, total - dead) ~ block + duration,
-  data   = mortalityByPlot(e1),
+  data   = mortalityByPlot(e1[duration != "8"], "T3"),
   family = binomial(link = "logit"),
   method = brglmFit # Firth-type bias reduction
 )
@@ -109,6 +109,7 @@ anova(update(model, . ~ block), model, test = "Chisq")
 Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 
+e1_mort_t3_emm <- emmeans(model, ~ duration, type = "response") |> as.data.frame()
 
 
 # betabinomial
@@ -129,7 +130,7 @@ emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 
 model <- glm(
   cbind(dead, total - dead) ~ block + duration,
-  data   = mortalityByPlot(e2),
+  data   = mortalityByPlot(e2, "T3"),
   family = binomial(link = "logit"),
   method = brglmFit
 )
@@ -143,6 +144,7 @@ anova(update(model, . ~ block), model, test = "Chisq")
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
 # emmeans(model, ~ duration, type = "response") %>% pairs(adjust = "tukey")
 
+e2_mort_t3_emm <- emmeans(model, ~ duration, type = "response") |> as.data.frame()
 
 
 # Combine E1 and E2
@@ -407,9 +409,9 @@ plot(emm_health_e4)
 
 ```{r}
 
-mortalityPlot <- function(data) {
+mortalityPlot <- function(data, timepoint = "T2") {
   ggerrorplot(
-    data = mortalityByPlot(data)[, mortality := dead / total],
+    data = mortalityByPlot(data, timepoint = "T2")[, mortality := dead / total],
     x = "duration",
     y = "mortality",
     add = "jitter",
@@ -417,7 +419,7 @@ mortalityPlot <- function(data) {
   )
 }
 
-mortalityPlot(e1)
+#mortalityPlot(e2, "T2")
 
 
 # emmeans error plot
@@ -444,6 +446,8 @@ emmMortalityPlot <- function(data, x, emm, facet = NULL, xlab = "Waterlogging tr
 }
 
 # E1 E2 combined
+e1_e2_mortality[, experiment := gsub("E", "Experiment ", experiment)]
+e1_e2_mortality_emm[, experiment := gsub("E", "Experiment ", experiment)]
 
 a <- emmMortalityPlot(e1_e2_mortality, "duration", e1_e2_mortality_emm, "experiment", xlab = "Waterlogging duration (weeks)")
 a
@@ -458,6 +462,12 @@ b
 # ggboxplot(mortalityByPlotE3(e3), "treatment", "mortality", facet.by = "genotype", add = "jitter") +
 #   scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1))
 
+# E1 and E2 at T3 (after second waterlogging)
+e1t3 <- emmMortalityPlot(mortalityByPlot(e1[duration != "8"]), "duration", e1_mort_t3_emm, xlab = "Waterlogging duration (weeks)")
+
+e2t3 <- emmMortalityPlot(mortalityByPlot(e2), "duration", e2_mort_t3_emm, xlab = "Waterlogging duration (weeks)")
+
+ggarrange(e1t3, e2t3, labels = c("A", "B"), ncol = 2)
 
 
 mortalityBoxplot <- function(data, x, facet = NULL) {
@@ -474,7 +484,8 @@ mortalityBoxplot <- function(data, x, facet = NULL) {
     scale_y_continuous(labels = label_percent(accuracy = 1), limits = c(0, 1)) +
     labs(x = "Waterlogging treatment", y = "Mortality") +
     guides(colour = "none") +
-    theme_bw()#(base_size = 12)
+    theme_bw() + #(base_size = 12)
+    theme(axis.text.x = element_text(angle = 10, vjust = 1, hjust = 1))
     
   if(!is.null(facet)) p <- p + facet_wrap(~ get(facet))
 
@@ -484,10 +495,20 @@ mortalityBoxplot <- function(data, x, facet = NULL) {
 # b <- mortalityBoxplot(e3_mortality, "treatment", facet = "genotype")
 
 c <- mortalityBoxplot(mortalityByPlot(e4), "treatment")
+c
 
 ggarrange(a, b, c, labels = c("A", "B", "C"), ncol = 1)
 
-ggsave(filename = "mortality_combined.png", path = figures_dir, width = 14, height = 20, units = "cm")
+ggsave(filename = "mortality_combined_2.png", path = figures_dir, width = 14, height = 20, units = "cm")
+
+
+# All combined
+
+e1e1_t3 <- ggarrange(e1t3, e2t3, labels = c("B", "C"), ncol = 2)
+
+ggarrange(a, e1e1_t3, b, c, labels = c("A", "", "D", "E"), ncol = 1)
+
+ggsave(filename = "mortality_combined_3.png", path = figures_dir, width = 14, height = 20, units = "cm")
 
 ```
 
@@ -828,14 +849,33 @@ emmeans(e3_diameter_lmm, trt.vs.ctrl ~ treatment | genotype)
 
 #' Pivot growth
 pivotGrowth <- function(data, pivot, values = c("diameter", "height")) {
-  dcast(data, pivot, value.var = values)
+  dcast(data, pivot, value.var = values)[, experiment := data$experiment[[1]]]
 }
 
+#' Remove negative growth measurements (likely measurement error)
+clean_growth <- function(dt) {
+  # Metrics can be diameter or height (or extension_mean in E4)
+  metrics <- unique(sub("_T[0-9]$", "", grep("_T[0-9]$", names(dt), value = TRUE)))
+  for (m in metrics) {
+    t1 <- paste0(m, "_T1"); t2 <- paste0(m, "_T2"); t3 <- paste0(m, "_T3")
+
+    # If T2 < T1, set T2 to NA
+    if (all(c(t1, t2) %in% names(dt))) dt[get(t2) < get(t1), (t2) := NA]
+
+    # If T3 < T2, set T3 to NA
+    if (all(c(t2, t3) %in% names(dt))) dt[get(t3) < get(t2), (t3) := NA]
+
+    # If T3 < T1, set T3 to NA (ensuring non-decreasing from baseline)
+    if (all(c(t1, t3) %in% names(dt))) dt[get(t3) < get(t1), (t3) := NA]
+  }
+  dt
+}
 
 # E1
 
 pivot <- block + plot + pot + tree + duration ~ timepoint
 e1_growth <- pivotGrowth(e1, pivot)
+e1_growth <- clean_growth(e1_growth)
 # e1_growth[, diameter_T1c := scale(diameter_T1, center = TRUE, scale = FALSE)]
 
 # b0 <- mean(e1_growth$diameter_T1)
@@ -869,6 +909,7 @@ e1_dia_T3_emm <- emmeans(model, ~ duration) |> as.data.table()
 
 pivot <- block + plot + pot + tree + duration ~ timepoint
 e2_growth <- pivotGrowth(e2, pivot)
+e2_growth <- clean_growth(e2_growth)
 
 # First year growth
 design <- diameter_T2 ~ diameter_T1 + duration + (1 | block / plot / pot)
@@ -896,6 +937,7 @@ e2_dia_T3_emm <- emmeans(model, ~ duration) |> as.data.table()
 
 pivot <- block + plot + pot + genotype + treatment ~ timepoint
 e3_growth <- pivotGrowth(e3, pivot)
+e3_growth <- clean_growth(e3_growth)
 
 design <- diameter_T2 ~ (diameter_T1 + treatment) * genotype + (1 | block / genotype / plot)
 model <- lmer(design, e3_growth)
@@ -913,6 +955,7 @@ e3_dia_emm <- emmeans(model, ~ treatment | genotype) |> as.data.table()
 
 pivot <- pot + block + plot + treatment ~ timepoint
 e4_growth <- pivotGrowth(e4, pivot, values = c("diameter", "extension_mean"))
+e4_growth <- clean_growth(e4_growth)
 
 # Covariate approach
 design <- diameter_T2 ~ diameter_T1 + treatment + (1 | block / plot)
@@ -996,7 +1039,7 @@ ranova(model)
 anova(model, ddf = "Kenward-Roger", type = 3)
 # check_model(model) # fine
 # emmeans(model, trt.vs.ctrl ~ treatment | genotype)
-# emmeans(model, revpairwise ~ genotype, type = "response")
+emmeans(model, revpairwise ~ genotype, type = "response")
 e3_height_emm <- emmeans(model, ~ treatment | genotype) |> as.data.table()
 
 
@@ -1070,11 +1113,17 @@ growthSlopePlot <- function(
     ) +
     labs(
       x = xlab,
-      y = if(type == "diameter") "Diameter (mm)" else if(type == "height") "Height (cm)"
+      y = if (type == "diameter") "Diameter (mm)" else if (type == "height") "Height (cm)"
     ) +
     # theme(legend.position = "none") +
     guides(colour = "none") +
     theme_bw()
+  
+  # E4 plot angle text
+  # if (data$treatment[[1]] == "4 weeks winter") {
+  if (data$experiment[[1]] == "E4") {
+    p <- p + theme(axis.text.x = element_text(angle = 10, vjust = 1, hjust = 1))
+  }
 
   if (!is.null(facet)) {
     facet_formula <- as.formula(paste("~", facet))
@@ -1099,7 +1148,8 @@ extPlot <- function(data, x, emm) {
   ) +
   labs(x = "Waterlogging treatment", y = "Extension (cm)") +
   guides(colour = "none") +
-  theme_bw()
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 10, vjust = 1, hjust = 1))
 }
 
 
@@ -1142,14 +1192,14 @@ ggarrange(
   ggarrange(dia_e2_t2_plot, dia_e2_t3_plot, labels = c("C", "D")),
   dia_e3_plot, dia_e4_plot, ncol = 1, labels = c("", "", "E", "F")
 )
-ggsave(filename = "diameter.png", path = figures_dir, height = 20, width = 15, units = "cm")
+ggsave(filename = "diameter_2.png", path = figures_dir, height = 20, width = 15, units = "cm")
 
 ggarrange(
   ggarrange(height_e1_t2_plot, height_e1_t3_plot, labels = c("A", "B")),
   ggarrange(height_e2_t2_plot, height_e2_t3_plot, labels = c("C", "D")),
   height_e3_plot, height_e4_plot, ncol = 1, labels = c("", "", "E", "F")
 )
-ggsave(filename = "height.png", path = figures_dir, height = 20, width = 15, units = "cm")
+ggsave(filename = "height_2.png", path = figures_dir, height = 20, width = 15, units = "cm")
 
 
 ```
@@ -1798,7 +1848,7 @@ model <- glmmTMB(design, data = e1_canker, family = glmmTMB::tweedie(link = "log
 # anova(update(model, . ~ block), model, test = "Chisq")
 Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
-e1_canker_t2_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+# e1_canker_t2_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
 
 # E1 canker counts T3
 # design <- cankers_T3_per_tree + 0.001 ~ block + duration
@@ -1815,7 +1865,7 @@ model <- glmmTMB(design, data = e1_canker, family = glmmTMB::tweedie(link = "log
 # anova(update(model, . ~ block), model, test = "Chisq")
 Anova(model, type = 3)
 emmeans(model, trt.vs.ctrl ~ duration, type = "response")
-e1_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
+# e1_canker_t3_emm <- setDT(as.data.frame(emmeans(model, ~ duration, type = "response")))
 
 
 

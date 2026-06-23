@@ -97,11 +97,13 @@ treatments <- bind_rows(
 ```{r weather analysis}
 
 result <- data[treatments, on = .(Date >= start, Date <= end), .(
-  avg_min_temp  = mean(`Min Temp (°C)`, na.rm = TRUE),
-  avg_mean_temp = mean(`Mean Temp (°C)`, na.rm = TRUE),
-  avg_max_temp  = mean(`Max Temp (°C)`, na.rm = TRUE),
-  avg_rainfall  = mean(`Total Rainfall (mm)`, na.rm = TRUE),
-  avg_rh        = mean(`Average RH (% RH)`, na.rm = TRUE)
+  avg_min_temp    = mean(`Min Temp (°C)`, na.rm = TRUE),
+  avg_mean_temp   = mean(`Mean Temp (°C)`, na.rm = TRUE),
+  avg_max_temp    = mean(`Max Temp (°C)`, na.rm = TRUE),
+  days_below_zero = sum(`Mean Temp (°C)` < 0, na.rm = TRUE),
+  days_min_below_zero = sum(`Min Temp (°C)` < 0, na.rm = TRUE),
+  avg_rainfall    = mean(`Total Rainfall (mm)`, na.rm = TRUE),
+  avg_rh          = mean(`Average RH (% RH)`, na.rm = TRUE)
 ), by = .EACHI]
 
 cbind(treatments, result[, -"Date"])

@@ -89,6 +89,12 @@ e1[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL
 # Add experiment id column
 e1[, experiment := "E1"]
 
+# Change '0' to 'Control' in `duration`
+e1[, duration := factor(
+  gsub("0", "Control", duration), 
+  levels = c("Control", "1", "2", "4", "8")
+)]
+
 saveRDS(e1, file = here(object_dir, "e1.Rds"))
 
 ```
@@ -160,6 +166,12 @@ e2 <- merge(
   all.x = TRUE
 )
 e2[, height := coalesce(height.x, height.y)][, c("height.x", "height.y") := NULL]
+
+# Change '0' to 'Control' in `duration`
+e2[, duration := factor(
+  gsub("0", "Control", duration), 
+  levels = c("Control", "1", "2", "4", "8")
+)]
 
 saveRDS(e2, file = here(object_dir, "e2.Rds"))
 
@@ -276,10 +288,24 @@ e4[, health := coalesce(health.x, health.y)][, c("health.x", "health.y") := NULL
 # e4[, leaf_scar_cankers := coalesce(leaf_scar_cankers.x, leaf_scar_cankers.y)][, c("leaf_scar_cankers.x", "leaf_scar_cankers.y") := NULL]
 # e4[, rasp_inoculations := coalesce(rasp_inoculations.x, rasp_inoculations.y)][, c("rasp_inoculations.x", "rasp_inoculations.y") := NULL]
 
-e4[, treatment := factor(paste0(season, duration))]
+e4[, trt_code := factor(paste0(season, duration))]
 
 # head(e4)
 # names(e4)
+
+# Treatment names
+mapping <- c(
+  "control" = "Control",
+  "winter2" = "2 weeks winter",
+  "winter4" = "4 weeks winter",
+  "winter8" = "8 weeks winter",
+  "spring2" = "2 weeks spring",
+  "spring4" = "4 weeks spring",
+  "spring8" = "8 weeks spring"
+)
+
+e4[, treatment := factor(mapping[trt_code], levels = mapping)]
+
 
 saveRDS(e4, file = here(object_dir, "e4.Rds"))
 
